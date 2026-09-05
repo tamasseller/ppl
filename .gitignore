@@ -24,7 +24,7 @@ Thumbs.db
 npm-debug.log*
 
 # Throwaway modules a codegen test writes out and require()s back.
-**/test/.codegen-scratch/
+**/.codegen-scratch/
 
 # Sibling repos checked out beside this one — their own git, not this one's.
 /mog-core/
