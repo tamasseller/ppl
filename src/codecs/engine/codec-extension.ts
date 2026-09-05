@@ -462,28 +462,42 @@ interface StreamIter
     overwriteOnly: boolean
 }
 
+/** A frame's forks, indexed by iterator id. Index 0 stays empty — `i0` is
+ *  never frame state. */
+type Forks = (StreamIter | undefined)[]
+
 /**
  * @param direction encoder or decoder — see the file header.
  * @param root      the handle the entry procedure's `o0` is bound to.
  * @param buffer    the wire byte sequence. Iterator 0 (`i0`) is seeded here
- *                   at position 0 with `direction`'s capability; `iters`, like
- *                   `buffer`, is shared, run-wide, un-reset-by-frame state —
- *                   §2.1 requires this for `i0`, and a fork's whole point
- *                   (§8.4's checksum-with-fixup) is to stay live across
- *                   whatever the frame does next — unlike the per-frame
- *                   handle table above.
+ *                   at position 0 with `direction`'s capability, and is the
+ *                   one piece of run-wide iterator state: §2.1 requires the
+ *                   stream cursor to advance across the whole call graph.
+ *                   Forks are per-frame, like handles — ids restart at 1 in
+ *                   every callee, so a delegating codec keeps a parked fork
+ *                   (§8.4's checksum-with-fixup) across the calls it makes.
  */
 export function createCodecExtension(direction: Direction, root: Handle, buffer: number[]): Extension<CodecExtInstr>
 {
     const frames: Frame[] = [[root]]
-    const iters: StreamIter[] = [{ pos: 0, capability: direction === "encode" ? "write" : "read", overwriteOnly: false }]
+    const i0: StreamIter = { pos: 0, capability: direction === "encode" ? "write" : "read", overwriteOnly: false }
+    const forkFrames: Forks[] = [[]]
     const top = (): Frame => frames[frames.length - 1]!
+    const forks = (): Forks => forkFrames[forkFrames.length - 1]!
 
     function iterAt(id: number): StreamIter
     {
-        const it = iters[id]
+        if(id === 0) return i0
+        const it = forks()[id]
         if(!it) throw new Error(`codec extension: no stream iterator ${id} (CLONE_RD/CLONE_WR before use?)`)
         return it
+    }
+
+    /** `i0` is the stream itself, not a slot a fork may take over. */
+    function forkInto(dst: number, it: StreamIter): void
+    {
+        if(dst === 0) throw new Error("codec extension: CLONE_RD/CLONE_WR can't target i0 (§2.1)")
+        forks()[dst] = it
     }
 
     function exec(instr: CodecExtInstr, state: ExecState): void
@@ -601,14 +615,14 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
             case "CLONE_RD":
             {
                 const { src, dst } = instr
-                iters[dst] = { pos: iterAt(src).pos, capability: "read", overwriteOnly: false }
+                forkInto(dst, { pos: iterAt(src).pos, capability: "read", overwriteOnly: false })
                 return
             }
 
             case "CLONE_WR":
             {
                 const { src, dst } = instr
-                iters[dst] = { pos: iterAt(src).pos, capability: "write", overwriteOnly: true }
+                forkInto(dst, { pos: iterAt(src).pos, capability: "write", overwriteOnly: true })
                 return
             }
 
@@ -626,8 +640,9 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const { calleeIndex, src, ref } = instr
                 const child = computeChild(frame, src, ref, direction)
                 frames.push([child])
+                forkFrames.push([])
                 try { state.acc = state.callProc(calleeIndex, []) }
-                finally { frames.pop() }
+                finally { frames.pop(); forkFrames.pop() }
                 return
             }
 
@@ -636,8 +651,9 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const { calleeIndex, src } = instr
                 const child = computeNext(frame, src, direction)
                 frames.push([child])
+                forkFrames.push([])
                 try { state.acc = state.callProc(calleeIndex, []) }
-                finally { frames.pop() }
+                finally { frames.pop(); forkFrames.pop() }
                 return
             }
 

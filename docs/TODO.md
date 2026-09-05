@@ -1,11 +1,8 @@
 # PPL
 
-## Hygiene
-  - one package now (`src/core`, `src/codecs`, `src/target-js`); the layering is the import graph, so re-layering is a file move with no API impact
-
 ## Codec extension 
 
-- clarify stream iterator & object lifecycle: allocation side in docs/extension-surface.md §7-8
+- stream iterator & object lifecycle: settled — i0 global, forks and handles per-frame (docs/codec-extension.md §2.1)
 - TS side DSL upgrades: design sketch in docs/extension-surface.md, nothing implemented
 - Crypto primitives (CRC, hash, MAC, cipher, AEAD) — design sketch in docs/crypto.md, nothing implemented.
   - No reserved opcodes remain; needs the extension-level escape docs/crypto.md §2.1 proposes.

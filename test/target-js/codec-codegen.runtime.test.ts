@@ -13,9 +13,9 @@ import { describe, test } from "node:test"
 import * as assert from "node:assert/strict"
 
 import type { SemanticType } from "../../src/core/index"
-import { struct, union, unit, list, u8, integer, named, optional, buildTypeGraph, kindOf, SemanticTypeKinds } from "../../src/core/index"
-import { run } from "mog-core"
-import { buildCodec, binaryEncodeRules, binaryDecodeRules, createCodecExtension } from "../../src/codecs/index"
+import { struct, union, unit, list, u8, integer, named, optional, buildTypeGraph, kindOf, SemanticTypeKinds, pStructFields, pStar, pInteger } from "../../src/core/index"
+import { run, validateProgram, ir } from "mog-core"
+import { buildCodec, binaryEncodeRules, binaryDecodeRules, createCodecExtension, codecRule } from "../../src/codecs/index"
 
 import { generateCodecModule } from "../../src/target-js/engine/codec-module"
 import { loadGenerated } from "./load-generated"
@@ -174,5 +174,49 @@ describe("codec-codegen — compiled encode/decode agree with the interpreted pa
         }))
         const value = { variant: "node", value: { left: { variant: "leaf", value: 1 }, right: { variant: "leaf", value: 2 } } }
         assertMatchesInterpreted(Tree, "Tree", value)
+    })
+})
+
+describe("codec-codegen — fork frames match the reference VM (codec-extension.md §2.1)", () =>
+{
+    // A caller that parks a CLONE_WR across the call it makes, and a
+    // callee that clones the same id for its own use. Compiled output and
+    // interpreted execution must agree that the caller's fork survived.
+    const T = struct({ a: u8 })
+    const callerParksAFork = codecRule(pStructFields(pStar()), (_m, _c: void, resolve) =>
+        ir`clone_wr(0, 1);
+           write(0, 1, 111);
+           call_codec(${resolve(u8, undefined)}, 0, 0);
+           write(1, 1, 99);`)
+    const calleeClonesItsOwn = codecRule(pInteger(-Infinity, Infinity), (_m, _c: void) =>
+        ir`write(0, 1, load_val(0)); clone_rd(0, 1); u32 s = 0; s = read(1, 1);`)
+
+    test("a caller's parked fork survives the callee's own clone of the same id", () =>
+    {
+        const encodeProgram = buildCodec(T, [callerParksAFork, calleeClonesItsOwn], undefined)
+
+        const interpreted: number[] = []
+        const ext = createCodecExtension("encode", { container: { root: { a: 5 } }, key: "root", type: buildTypeGraph(T).root }, interpreted)
+        validateProgram(encodeProgram, ext)
+        run(encodeProgram, ext)
+        assert.deepEqual(interpreted, [99, 5])
+
+        const source = generateCodecModule({
+            name: "Forked", rootType: T, encodeProgram,
+            decodeProgram: buildCodec(T, binaryDecodeRules, undefined),
+        })
+        assert.ok(source.includes("pushForks(ctx)"), "a cloning procedure must install its own fork frame")
+        const mod = loadGenerated(source)
+        assert.deepEqual([...mod.encodeForked({ a: 5 })], interpreted)
+    })
+
+    test("a procedure that never clones carries no fork-frame overhead", () =>
+    {
+        const source = generateCodecModule({
+            name: "Plain", rootType: T,
+            encodeProgram: buildCodec(T, binaryEncodeRules, undefined),
+            decodeProgram: buildCodec(T, binaryDecodeRules, undefined),
+        })
+        assert.ok(!source.includes("pushForks(ctx)"))
     })
 })

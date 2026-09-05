@@ -279,6 +279,21 @@ function translateStmts(stmts: readonly Stmt<CodecExtInstr>[], entryNode: TypeNo
  *  decision every other join point in `codec-codegen-ext.ts` already
  *  makes, so this reduces to exactly today's behavior whenever
  *  `entryCorrespondence` is omitted. */
+/** A procedure that forks gets its own fork frame: ids restart at 1 in
+ *  every callee, so a caller's parked fork survives the calls it makes
+ *  (codec-extension.md §2.1). Only `i0` crosses the boundary. */
+function withForkFrame(clones: boolean, b: LineBuilder, body: () => void): void
+{
+    if(!clones)
+    {
+        body()
+        return
+    }
+
+    b.line("const forks = pushForks(ctx);")
+    b.block("try {", body, "} finally { popForks(ctx, forks); }")
+}
+
 export function generateProcedure(
     index: number, raised: RaisedProc<CodecExtInstr>, entryNode: TypeNode | undefined, direction: Direction,
     projection: ReadonlyMap<number, TSTypeDecl>,
@@ -286,7 +301,7 @@ export function generateProcedure(
 ): string
 {
     const slotTypes = new Map<number, TypeNode>(entryNode ? [[0, entryNode]] : [])
-    const {maxSlot, listTraversalSlots} = prescan(raised.body)
+    const {maxSlot, listTraversalSlots, clones} = prescan(raised.body)
     const correspondences = entryCorrespondence ? new Map([[0, entryCorrespondence]]) : undefined
     const g: GenCtx = {direction, slotTypes, projection, writeBacks: new Map(), idxDeclared: new Set(), tempCounter: {n: 0}, correspondences}
 
@@ -306,7 +321,7 @@ export function generateProcedure(
         {
             if(raised.peakSlots > raised.argCount)
                 b.line(`let ${Array.from({length: raised.peakSlots - raised.argCount}, (_, i) => `s${i + raised.argCount}`).join(", ")};`)
-            translateStmts(raised.body, undefined, g, b)
+            withForkFrame(clones, b, () => translateStmts(raised.body, undefined, g, b))
         })
         return b.toString()
     }
@@ -344,8 +359,11 @@ export function generateProcedure(
             )
             if(entryAccess.kind === "struct" && entryCorrespondence?.outcome === "matched")
                 injectLocalOnlyDefaults(entryCorrespondence, "v0", g, b)
-            translateStmts(raised.body, entryNode, g, b)
-            if(!endsInTerminator(raised.body)) emitReturn(g, b)
+            withForkFrame(clones, b, () =>
+            {
+                translateStmts(raised.body, entryNode, g, b)
+                if(!endsInTerminator(raised.body)) emitReturn(g, b)
+            })
         })
     }
     else
@@ -355,7 +373,7 @@ export function generateProcedure(
             if(raised.peakSlots > 0) b.line(`let ${Array.from({length: raised.peakSlots}, (_, i) => `s${i}`).join(", ")};`)
             if(maxSlot > 0) b.line(`let ${Array.from({length: maxSlot}, (_, i) => `v${i + 1}`).join(", ")};`)
             for(const slot of listTraversalSlots) idxCounter(slot, g, b)
-            translateStmts(raised.body, entryNode, g, b)
+            withForkFrame(clones, b, () => translateStmts(raised.body, entryNode, g, b))
         })
     }
 

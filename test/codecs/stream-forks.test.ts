@@ -9,11 +9,12 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
-import { unit, buildTypeGraph } from "../../src/core/index"
+import { unit, buildTypeGraph, struct, u8, pStructFields, pStar, pInteger } from "../../src/core/index"
 import { ir, proc, lowerProgram, validateProgram, run } from "mog-core"
 import type { RtlProgram } from "mog-core"
 
 import { createCodecExtension, codecRules } from "../../src/codecs/engine/codec-extension"
+import { buildCodec, codecRule } from "../../src/codecs/engine/resolver"
 import type { Handle } from "../../src/codecs/engine/codec-extension"
 import { validateCodecHandles } from "../../src/codecs/engine/validate-handles"
 import type { CodecExtInstr } from "../../src/codecs/engine/codec-ext-instr"
@@ -207,5 +208,76 @@ describe("static checks — validateCodecHandles", () =>
         const entry = proc([], ir`clone_rd(0, 1); write(1, 1, 5); return;`)
         const program = lower(entry)
         assert.throws(() => validateCodecHandles(program), /iterator 1 is read-only, not write/)
+    })
+})
+
+describe("stream forks — fork scope across delegation (§2.1)", () =>
+{
+    // Two procedures: the root struct's, and its single `u8` field's,
+    // reached by CALL_CODEC. Both deliberately use fork id 1 — a callee
+    // can't know what its caller parked there, which is the whole point.
+    const T = struct({ a: u8 })
+    const leafCloningItsOwnFork = codecRule(pInteger(-Infinity, Infinity), (_m, _c: void) =>
+        ir`write(0, 1, load_val(0)); clone_rd(0, 1); u32 s = 0; s = read(1, 1);`)
+
+    function encode(program: RtlProgram<CodecExtInstr>): number[]
+    {
+        const buffer: number[] = []
+        const ext = createCodecExtension("encode", { container: { root: { a: 5 } }, key: "root", type: buildTypeGraph(T).root }, buffer)
+        validateProgram(program, ext)
+        run(program, ext)
+        return buffer
+    }
+
+    test("a caller's parked fork survives a callee that clones the same id (§8.4's fixup, across a delegation)", () =>
+    {
+        const caller = codecRule(pStructFields(pStar()), (_m, _c: void, resolve) =>
+            ir`clone_wr(0, 1);
+               write(0, 1, 111);
+               call_codec(${resolve(u8, undefined)}, 0, 0);
+               write(1, 1, 99);`)
+        const program = buildCodec(T, [caller, leafCloningItsOwnFork], undefined)
+        assert.doesNotThrow(() => validateCodecHandles(program))
+        // 99 patches byte 0 — the fork is still parked where the caller left it.
+        assert.deepEqual(encode(program), [99, 5])
+    })
+
+    test("a callee cannot see a fork its caller established — ids restart at 1", () =>
+    {
+        const caller = codecRule(pStructFields(pStar()), (_m, _c: void, resolve) =>
+            ir`write(0, 1, 111);
+               clone_rd(0, 1);
+               call_codec(${resolve(u8, undefined)}, 0, 0);`)
+        // The callee reads id 1 without establishing it itself.
+        const borrower = codecRule(pInteger(-Infinity, Infinity), (_m, _c: void) =>
+            ir`write(0, 1, load_val(0)); u32 s = 0; s = read(1, 1);`)
+        const program = buildCodec(T, [caller, borrower], undefined)
+        assert.throws(() => validateCodecHandles(program), /stream iterator 1 was never cloned/)
+        // ...and the runtime agrees, rather than silently handing over the caller's.
+        assert.throws(() => encode(program), /no stream iterator 1/)
+    })
+
+    test("i0 is not scoped — the stream cursor advances straight through a call", () =>
+    {
+        const caller = codecRule(pStructFields(pStar()), (_m, _c: void, resolve) =>
+            ir`write(0, 1, 111);
+               call_codec(${resolve(u8, undefined)}, 0, 0);
+               write(0, 1, 222);`)
+        const leaf = codecRule(pInteger(-Infinity, Infinity), (_m, _c: void) =>
+            ir`write(0, 1, load_val(0));`)
+        assert.deepEqual(encode(buildCodec(T, [caller, leaf], undefined)), [111, 5, 222])
+    })
+})
+
+describe("stream forks — i0 is not a fork slot", () =>
+{
+    test("cloning into id 0 is rejected statically and at runtime", () =>
+    {
+        const entry = proc([], ir`clone_rd(0, 0); return;`)
+        const program = lower(entry)
+        assert.throws(() => validateCodecHandles(program), /can't target i0/)
+        const ext = encodeExt([])
+        validateProgram(program, ext)
+        assert.throws(() => run(program, ext), /can't target i0/)
     })
 })

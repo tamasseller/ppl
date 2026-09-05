@@ -107,7 +107,7 @@ export interface CodecModuleOptions
  *  header for why an unused import is harmless: no `noUnusedLocals`
  *  anywhere in this repo's tsconfigs). */
 export const RUNTIME_IMPORTS = [
-    "read", "write", "hasNext", "cloneRd", "cloneWr", "seek", "writeSeq", "readSeq", "readSeqView", "writeSeqRaw",
+    "read", "write", "hasNext", "cloneRd", "cloneWr", "seek", "pushForks", "popForks", "writeSeq", "readSeq", "readSeqView", "writeSeqRaw",
     "tagOf", "signExtend", "revBits", "CodecTrap",
 ] as const
 

@@ -62,13 +62,29 @@ Restricting a `CLONE_WR` fork to overwrite-only, and rejecting an attempted
 append through one, gives the target a simple invariant instead of support
 for arbitrary interleaved appends across several live cursors.
 
+**Lifetime.** `i0` is global: the stream cursor advances across the whole
+call graph, so a callee continues writing (or reading) exactly where its
+caller left off. Forks are per-frame. A `CALL_CODEC`/`CALL_CODEC_NEXT`
+callee starts with `i0` alone and its own fork ids from 1; whatever it
+establishes is discarded on return, and its caller's forks are untouched.
+A delegating codec therefore keeps a parked fork across the calls it makes,
+which is what §8.4's checksum-with-fixup needs the moment the framed
+content is a nested structure rather than bytes written in place.
+
+A fork cannot be passed to a callee or returned from one: iterator ids are
+instruction operands, not values, and the calling convention (§4) carries
+only `acc` and the stack. Frame-scoping takes nothing away — it removes the
+possibility of two procedures silently sharing a slot by picking the same
+id.
+
 ### 2.2 Object handles
 
 An object handle refers to a node in the host object tree: a struct, a
 union, a list, or a primitive value. `o0` is bound at codec entry to the
 object the procedure must encode or decode; `ENTER` (§3.2) spawns a new
 handle from an existing one by navigating to a child. Handle IDs are small
-literals, typically `< 4`.
+literals, typically `< 4`, and are per-frame exactly as forks are: a callee
+sees one handle, its own `o0`, and nothing of its caller's.
 
 A handle's type is statically known, derived from the navigation path that
 produced it, which lets one `ENTER` encoding carry three meanings

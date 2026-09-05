@@ -14,17 +14,12 @@
  * exact, since `CALL_CODEC`/`CALL_CODEC_NEXT` genuinely give the callee a
  * fresh handle frame (§2.2, `codec-extension.ts`'s `frames.push`).
  *
- * Stream iterators are different: `i0` and every fork are *global*, shared
- * across the whole call graph (§2.1 — never rebound at a call), not
- * frame-scoped. A fully correct check would need each procedure's
- * reachable iterator set threaded through every possible caller. Nothing
- * built so far clones an iterator in one procedure and uses it in another
- * (§8.4's checksum-with-fixup is entirely one procedure), so this file
- * takes the conservative, cheaper option instead: each procedure must
- * establish its own iterators (via `CLONE_RD`/`CLONE_WR`) itself, just
- * like handles. This rejects a legal-but-unseen cross-procedure sharing
- * pattern the runtime would actually allow — a deliberate, disclosed
- * scope limit, not a bug.
+ * Stream iterators split in two. `i0` is global — §2.1 needs the stream
+ * cursor to advance across the whole call graph — and so is seeded into
+ * every procedure. Forks are frame-scoped like handles: ids restart at 1
+ * in each callee, so each procedure must establish its own via
+ * `CLONE_RD`/`CLONE_WR`. That makes this check exact for both spaces, not
+ * an approximation of either.
  *
  * §7.2's per-resource peak-usage stats (object-handle frame peaks, stream-
  * iterator peaks) were built and then removed: envisioned for a target
@@ -97,6 +92,13 @@ function nextOf(src: TypeNode, procIndex: number, pc: number, opName: string): T
     const edge = src.edges[0]
     if(!edge) fail(procIndex, pc, `${opName}: list type has no element edge`)
     return edge.target
+}
+
+/** `i0` is the stream itself, not a slot a fork may take over. */
+function forkInto(env: IterEnv, procIndex: number, pc: number, dst: number, capability: IterCapability, opName: string): void
+{
+    if(dst === 0) fail(procIndex, pc, `${opName}: can't target i0 (§2.1)`)
+    env.set(dst, capability)
 }
 
 function iterOf(env: IterEnv, procIndex: number, pc: number, id: number, opName: string): IterCapability
@@ -222,14 +224,14 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
             {
                 const {src, dst} = instr
                 iterOf(iterEnv, procIndex, pc, src, instr.ext) // src's own capability doesn't matter (§2.1)
-                iterEnv.set(dst, "read")
+                forkInto(iterEnv, procIndex, pc, dst, "read", instr.ext)
                 return
             }
             case "CLONE_WR":
             {
                 const {src, dst} = instr
                 iterOf(iterEnv, procIndex, pc, src, instr.ext)
-                iterEnv.set(dst, "write")
+                forkInto(iterEnv, procIndex, pc, dst, "write", instr.ext)
                 return
             }
             case "WRITE_SEQ":

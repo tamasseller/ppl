@@ -98,7 +98,7 @@ interface CodecScope
     readonly o0: Handle           // bound by the calling convention
     readonly i0: Iter             // ditto
     slot(): Slot                  // a scratch handle id
-    iter(): Iter                  // an iterator id, program-wide
+    iter(): Iter                  // a fork id, scoped to this procedure
 }
 ```
 
@@ -148,10 +148,11 @@ ir`
 
 ## 7. What the TS side gets that the DSL side cannot
 
-- **Iterators.** They are global across the call graph (codec-extension.md
-  §2.1) — the reason validate-handles.ts settled for "each procedure
-  establishes its own". A TS allocator is program-scoped by construction; a
-  DSL-side `iter` declaration would be block-scoped, the wrong lifetime.
+- **Iterators.** A fork lives for its procedure (codec-extension.md §2.1):
+  it must outlast the calls that procedure makes — that is what a parked
+  fixup writer is for — but no longer. A TS allocator matches that
+  exactly, one `CodecScope` per procedure; a DSL-side `iter` declaration
+  would be block-scoped, too short.
 - **Typed navigation.** `Handle.type` walks the same identity-safe
   `TypeGraph` the resolver already trusts, checked in the editor before
   anything runs. No DSL-level type system approaches that.
@@ -171,9 +172,9 @@ slot typing stays validate-handles.ts's job, as it must anyway — images
 arrive from the wire without passing through any of this.
 
 Ids go monotonic per procedure, with no block-scoped reclaim. Per-procedure
-counts stay small (delegation gives each codec a fresh handle frame); an
-explicit TS scope is the fix if it ever bites, and is a more precise
-lifetime than a DSL block, since the two need not coincide.
+counts stay small (delegation gives each codec fresh handle and fork
+frames); an explicit TS scope is the fix if it ever bites, and is a more
+precise lifetime than a DSL block, since the two need not coincide.
 
 No infix sugar. `memory[i] += 1` stays `st8(i, ld8(i) + 1)`, honest about
 the double read.

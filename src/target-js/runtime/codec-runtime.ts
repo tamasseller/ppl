@@ -53,12 +53,12 @@ export function tagOf(variantName: string, variantNames: readonly string[]): num
 export interface Iter { pos: number; capability: "read" | "write"; overwriteOnly: boolean }
 
 /** Shared, run-wide state every generated procedure function threads
- *  through unchanged — the direct counterpart of codec-extension.ts's own
- *  `buffer`/`iters`, which are shared across every procedure call for the
- *  same reason (`createCodecExtension`'s own doc comment: "run-wide,
- *  un-reset-by-frame state"). Handle-table slots, by contrast, are real
- *  local variables in generated code — genuinely local to one procedure
- *  call, never threaded through `Ctx`.
+ *  through unchanged. `buffer` and `iters[0]` (`i0`) are genuinely
+ *  run-wide — codec-extension.md §2.1 needs the stream cursor to advance
+ *  across the whole call graph. The forks above it are not: a procedure
+ *  that clones installs its own frame (`pushForks`), so ids restart at 1
+ *  in every callee. Handle-table slots, by contrast, are real local
+ *  variables in generated code, never threaded through `Ctx` at all.
  *
  *  `buffer` is a real `Uint8Array` throughout, on both the decode side
  *  (where it's the caller's own input, used directly — no copy) and the
@@ -216,6 +216,20 @@ export function hasNext(ctx: Ctx, iterIdx: number): number
     }
 
     return it.pos < ctx.length ? 1 : 0
+}
+
+/** Install a fresh fork frame, keeping only `i0`; returns what to hand
+ *  `popForks` on the way out. Emitted only for procedures that clone. */
+export function pushForks(ctx: Ctx): Iter[]
+{
+    const saved = ctx.iters
+    ctx.iters = [saved[0]!]
+    return saved
+}
+
+export function popForks(ctx: Ctx, saved: Iter[]): void
+{
+    ctx.iters = saved
 }
 
 export function cloneRd(ctx: Ctx, srcIdx: number, dstIdx: number): void

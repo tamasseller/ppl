@@ -258,9 +258,10 @@ export function expectAccessor<K extends Accessor["kind"]>(access: Accessor, kin
  *  lifetime frame) and which slots are ever the `src` of an `ENTER_NEXT`/
  *  `CALL_CODEC_NEXT` (encode needs an ascending index counter for each,
  *  declared alongside — see this file's own header for why). */
-export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number; listTraversalSlots: ReadonlySet<number>}
+export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number; listTraversalSlots: ReadonlySet<number>; clones: boolean}
 {
     let max = 0
+    let clones = false
     const bumpAll = (indices: readonly number[]): void => {for(const i of indices) if(i > max) max = i}
     const listTraversalSlots = new Set<number>()
 
@@ -278,7 +279,8 @@ export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number
                 case "CALL_CODEC_NEXT": bumpAll([e.src]); listTraversalSlots.add(e.src); break
                 case "WRITE_SEQ": case "READ_SEQ": bumpAll([e.handle]); break
                 // Iterator ids, never handle-table slots — nothing to bump.
-                case "READ": case "WRITE": case "HAS_NEXT": case "CLONE_RD": case "CLONE_WR": case "SEEK": break
+                case "CLONE_RD": case "CLONE_WR": clones = true; break
+                case "READ": case "WRITE": case "HAS_NEXT": case "SEEK": break
                 default: assertNever(e)
             }
             for(const a of e.args) visitExpr(a)
@@ -305,7 +307,7 @@ export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number
     }
 
     visitStmts(stmts)
-    return {maxSlot: max, listTraversalSlots}
+    return {maxSlot: max, listTraversalSlots, clones}
 }
 
 // ─────────────────────────────────────────────────────────────────────────
