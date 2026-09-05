@@ -12,6 +12,7 @@
  */
 export * from "./engine/codec-extension"
 export * from "./engine/resolver"
+export * from "./engine/scope"
 export * from "./engine/validate-handles"
 export * from "./engine/opcodes"
 export * from "./engine/type-tree-wire"

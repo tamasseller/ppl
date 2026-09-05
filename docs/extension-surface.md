@@ -1,8 +1,9 @@
 # Extension authoring surface
 
-**Status: design sketch, unimplemented.** Decides where an extension's DSL
-ergonomics live. Conclusion: the TS metaprogramming layer; the DSL grammar
-stays frozen. Nothing in `src/` implements the carriers of §5 yet.
+**Status: implemented** (`src/codecs/engine/scope.ts`). Decides where an
+extension's DSL ergonomics live. Conclusion: the TS metaprogramming layer;
+the DSL grammar stays frozen. A rule body receives its procedure's
+`CodecScope` as `produce`'s fourth argument.
 
 ## 1. The question
 
@@ -69,6 +70,11 @@ badly. Splicing only the constant operands leaves `write(${wire}, 1, byte &
 0x7F)`, and the expression never leaves the text.
 
 ## 5. The carriers
+
+Two carriers are spelled differently in `scope.ts` than here, each because
+the bare name is already taken in this package's public surface: `IterId`
+for `Iter` (target-js's runtime iterator state) and `SlotHandle` for
+`Handle` (codec-extension.ts's runtime object binding).
 
 ```ts
 /** An allocated stream-iterator id. Splices as its number. */

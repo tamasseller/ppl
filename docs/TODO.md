@@ -2,8 +2,8 @@
 
 ## Codec extension 
 
-- stream iterator & object lifecycle: settled — i0 global, forks and handles per-frame (docs/codec-extension.md §2.1)
-- TS side DSL upgrades: design sketch in docs/extension-surface.md, nothing implemented
+- clarify stream iterator & object lifecycle: allocation side in docs/extension-surface.md §7-8
+- TS side DSL upgrades: carriers implemented (src/codecs/engine/scope.ts); no existing rule adopts them yet
 - Crypto primitives (CRC, hash, MAC, cipher, AEAD) — design sketch in docs/crypto.md, nothing implemented.
   - No reserved opcodes remain; needs the extension-level escape docs/crypto.md §2.1 proposes.
   - Key material: host-bound key slot table, never an ISA value or an object handle (§5). Key establishment (DH) stays above this layer.
@@ -12,8 +12,8 @@
 
 ## Target codegen
 
-- try to apply a core vs codec-extension split, should be pretty easy i think, if done right core codegen could move into the mog-core repo
 - js codegen total runtime stream and object accessor isolation -> it becomes slim core that basically always uses a runtime dep + bunch of rules that depend on the details of that runtime mainly.
+- try to apply a core vs codec-extension split, should be pretty easy i think, if done right core codegen could move into the mog-core repo
 - c++ codegen the same way as the js works: the core should be almost identical to js + another bunch of specific rules
 
 ## Proofing

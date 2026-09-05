@@ -49,6 +49,8 @@ import type { ResolverRule } from "../../core/index"
 import type { IrFragment, Procedure, RtlProgram } from "mog-core"
 import { declareProc, defineProc, ir, lowerProgram } from "mog-core"
 import { codecRules } from "./codec-extension"
+import { codecScope } from "./scope"
+import type { CodecScope } from "./scope"
 import type { CodecExtInstr } from "./codec-ext-instr"
 
 /**
@@ -72,6 +74,7 @@ export interface CodecRule<Ctx>
         match: TypeMatch,
         ctx: Ctx,
         resolve: (childType: SemanticType, ctx: Ctx) => Procedure,
+        scope: CodecScope,
     ) => IrFragment
 }
 
@@ -92,6 +95,7 @@ export function codecRule<P extends TypePattern, Ctx>(
         match: MatchOf<P>,
         ctx: Ctx,
         resolve: (childType: SemanticType, ctx: Ctx) => Procedure,
+        scope: CodecScope,
     ) => IrFragment,
 ): CodecRule<Ctx>
 {
@@ -135,9 +139,11 @@ export function createCodecResolver<Ctx>(
     // nothing ever independently `resolve()`s their absorbed element).
     const adapted: readonly ResolverRule<Procedure, Ctx>[] = rules.map(rule => ({
         pattern: rule.pattern,
-        fill: (placeholder, match, _node, ctx, resolve) =>
+        fill: (placeholder, match, node, ctx, resolve) =>
         {
-            defineProc(placeholder, rule.produce(match, ctx, resolve))
+            // One scope per procedure — the lifetime both resources
+            // actually have (docs/extension-surface.md §5).
+            defineProc(placeholder, rule.produce(match, ctx, resolve, codecScope(node)))
         },
     }))
 
