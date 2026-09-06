@@ -222,6 +222,12 @@ is core. Machinery invented to solve one component's problem is still
 judged on its own merits, regardless of which package the need first
 surfaced in.
 
+One constraint the import graph imposes on re-layering: `codecs/engine`
+cannot move into `core`. `core` reaches for nothing outside itself, and
+`codec-extension.ts` is built on `mog-core`'s `Extension`/`ExecState`/
+`ExtOpEffect` — moving it down would put `mog-core` on the bottom layer's
+own import list.
+
 ### Type mapping
 
 A target's type mapping is a rule list resolved against the semantic
