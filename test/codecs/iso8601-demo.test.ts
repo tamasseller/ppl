@@ -47,9 +47,9 @@ const TIMESTAMP_SHAPE = pStruct({ secs: pInteger(-Infinity, Infinity), nanos: pI
  *  `pStruct` (named-field matching) rather than `pStructFields`'s
  *  homogeneous-any-field-type matching, since this must target one
  *  specific struct shape, not every struct. */
-const iso8601EncodeRule = codecRule(TIMESTAMP_SHAPE, (match, _ctx: void) =>
+const iso8601EncodeRule = codecRule(TIMESTAMP_SHAPE, (match, _ctx: void, _resolve, scope) =>
 {
-    const secsIndex = match.fieldMatches.secs.index
+    const secs = scope.slot().enter(scope.o0, match.fieldMatches.secs.index)
 
     // Fixed 2-digit zero-padded decimal (0-59) — simpler than
     // json.ts's `emit_decimal` (no variable width, no leading-zero
@@ -68,9 +68,9 @@ const iso8601EncodeRule = codecRule(TIMESTAMP_SHAPE, (match, _ctx: void) =>
 
     return ir`
         ${emitLiteral("1970-01-01T")}
-        enter(1, 0, ${secsIndex});
+        ${secs.code}
         u32 total = 0;
-        total = load_val(1);
+        total = load_val(${secs});
         u32 h = 0;
         while (total >= 3600) { total = total - 3600; h = h + 1; }
         u32 m = 0;

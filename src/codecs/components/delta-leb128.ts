@@ -55,6 +55,7 @@ import { concreteKindOf, derefType, SemanticTypeKinds, pList, pInteger } from ".
 import type { Direction } from "../engine/codec-extension"
 import { buildCodec } from "../engine/resolver"
 import { codecRule } from "../engine/resolver"
+import type { CodecScope } from "../engine/scope"
 import type { CodecExtInstr } from "../engine/codec-ext-instr"
 
 // ── leb128_encode(value) — §8.3, as an ir` ` fragment ────────────────────
@@ -102,24 +103,26 @@ function leb128DecodeBody(): IrFragment
 // ── The list walk — §8.6, adapted to this implementation's explicit-
 //    operand convention (no implicit `o0`/`i0` defaults) ────────────────
 
-function deltaEncodeBody(leb128: Procedure): IrFragment
+function deltaEncodeBody(leb128: Procedure, s: CodecScope): IrFragment
 {
+    // Built once; its `code` runs per element, advancing the cursor.
+    const elem = s.slot().enterNext(s.o0)
     return ir`
         u32 left = 0;
-        left = count(0);
-        write(0, 1, left);
+        left = count(${s.o0});
+        write(${s.i0}, 1, left);
         if (left == 0) { return; }
-        enter_next(1, 0);
+        ${elem.code}
         u32 prev = 0;
-        prev = load_val(1);
+        prev = load_val(${elem});
         ${leb128}((prev << 1) ^ -((prev & 0x80000000) != 0));
         left = left - 1;
         u32 cur = 0;
         u32 delta = 0;
         while (left != 0)
         {
-            enter_next(1, 0);
-            cur = load_val(1);
+            ${elem.code}
+            cur = load_val(${elem});
             delta = cur - prev;
             ${leb128}((delta << 1) ^ -((delta & 0x80000000) != 0));
             prev = cur;
@@ -128,28 +131,29 @@ function deltaEncodeBody(leb128: Procedure): IrFragment
     `
 }
 
-function deltaDecodeBody(leb128: Procedure): IrFragment
+function deltaDecodeBody(leb128: Procedure, s: CodecScope): IrFragment
 {
+    const elem = s.slot().enterNext(s.o0)
     return ir`
         u32 left = 0;
-        left = read(0, 1);
-        open_list(0);
+        left = read(${s.i0}, 1);
+        open_list(${s.o0});
         if (left == 0) { return; }
         u32 zz = 0;
         u32 prev = 0;
         u32 delta = 0;
-        enter_next(1, 0);
+        ${elem.code}
         zz = ${leb128}();
         prev = (zz >> 1) ^ -(zz & 1);
-        store_val(1, prev);
+        store_val(${elem}, prev);
         left = left - 1;
         while (left != 0)
         {
-            enter_next(1, 0);
+            ${elem.code}
             zz = ${leb128}();
             delta = (zz >> 1) ^ -(zz & 1);
             prev = prev + delta;
-            store_val(1, prev);
+            store_val(${elem}, prev);
             left = left - 1;
         }
     `
@@ -167,18 +171,18 @@ function deltaDecodeBody(leb128: Procedure): IrFragment
  */
 const LIST_OF_INTEGER = pList(pInteger(-Infinity, Infinity))
 
-export const deltaLeb128EncodeRule = codecRule<ListPattern<IntegerPattern>, void>(LIST_OF_INTEGER, () =>
+export const deltaLeb128EncodeRule = codecRule<ListPattern<IntegerPattern>, void>(LIST_OF_INTEGER, (_m, _c, _r, s) =>
 {
     const leb128 = declareProc(["value"])
     defineProc(leb128, leb128EncodeBody())
-    return deltaEncodeBody(leb128)
+    return deltaEncodeBody(leb128, s)
 })
 
-export const deltaLeb128DecodeRule = codecRule<ListPattern<IntegerPattern>, void>(LIST_OF_INTEGER, () =>
+export const deltaLeb128DecodeRule = codecRule<ListPattern<IntegerPattern>, void>(LIST_OF_INTEGER, (_m, _c, _r, s) =>
 {
     const leb128 = declareProc([])
     defineProc(leb128, leb128DecodeBody())
-    return deltaDecodeBody(leb128)
+    return deltaDecodeBody(leb128, s)
 })
 
 /** Build the self-contained delta+LEB128 program for a `List<Integer>`,

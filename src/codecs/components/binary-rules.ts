@@ -28,13 +28,14 @@
  * `structDecodeRule`, and `HOIST_MAX_VARIANTS` for the break-even point.
  */
 
-import type { IrFragment, Procedure } from "mog-core"
+import type { IrFragment } from "mog-core"
 import { ir } from "mog-core"
-import type { SemanticType, UnionType, IntegerPattern, UnitPattern, StructFieldsMatch, TypeNode } from "../../core/index"
+import type { SemanticType, UnionType, IntegerPattern, UnitPattern, StructFieldsMatch } from "../../core/index"
 import { SemanticTypeKinds } from "../../core/index"
 import { pInteger, pUnit, pList, pUnionFields, pStructFields, pStar } from "../../core/index"
 import { intWireSize } from "../engine/codec-extension"
 import type { CodecRule } from "../engine/resolver"
+import type { SlotHandle } from "../engine/scope"
 import { codecRule } from "../engine/resolver"
 
 // ── Integers ─────────────────────────────────────────────────────────────
@@ -163,6 +164,9 @@ interface HoistedField
     /** One variant payload's raw SemanticType per variant, in declaration
      *  order — resolvable by identity, no TypeNode needed. */
     readonly variantTypes: readonly SemanticType[]
+    /** The scratch slot navigated to this field, and the `enter` that put
+     *  it there. */
+    readonly handle: SlotHandle
 }
 
 // A standalone union always costs exactly 1 byte (8 bits) for its tag
@@ -175,33 +179,22 @@ const BITMAP_MAX_BITS = 32   // one register's worth (vm.ts's ALU is 32-bit)
 const bitsFor = (variantCount: number): number =>
     variantCount <= 1 ? 0 : Math.ceil(Math.log2(variantCount))
 
-/**
- * `f.type` may still be a reference thunk — for a self-referential schema
- * (a recursive union-typed field), dereferencing it directly (the old
- * `concreteKindOf`/`derefType` approach) re-invokes the thunk fresh,
- * producing brand-new variant-payload objects that were never registered
- * in the `TypeGraph`'s cycle-breaking identity map (`src/core/type-
- * graph.ts`'s `byObject`) — a later `resolve(v, ...)` on one of those then
- * fails with "not reachable". `resolve(f.type, ctx)` goes through the
- * *same* graph the rest of this rule already trusts: its `Procedure`'s
- * `header` (resolver.ts) is the exact `TypeNode` — already deref'd once,
- * already identity-safe — that `f.type` maps to. Calling `resolve` here
- * merely to peek at `.header`, without ever splicing the returned
- * `Procedure` into any `ir` text, adds nothing to the final program:
- * reachability is driven by which procedures actually get interpolated,
- * not by how many times `resolve` was called.
- */
+/** `f.type` may still be a reference thunk, so the field type is taken off
+ *  the navigation rather than by dereferencing it: `enter` reads the same
+ *  `TypeGraph` the rest of this rule trusts, keeping variant payloads
+ *  identity-safe for a later `resolve`. */
 function classifyHoistableFields(
     fieldMatches: StructFieldsMatch["fieldMatches"],
-    resolve: (childType: SemanticType, ctx: void) => Procedure,
+    navigate: (fieldIndex: number) => SlotHandle,
 ): ReadonlyMap<number, HoistedField>
 {
     const byField = new Map<number, HoistedField>()
     let bitOffset = 0
 
-    fieldMatches.forEach((f, fieldIndex) =>
+    fieldMatches.forEach((_f, fieldIndex) =>
     {
-        const fieldType = (resolve(f.type, undefined).header as TypeNode).type
+        const handle = navigate(fieldIndex)
+        const fieldType = handle.type.type
         if(fieldType.kind !== SemanticTypeKinds.Union) return
         const unionType = fieldType as UnionType
         const variantCount = unionType.variants.size
@@ -213,6 +206,7 @@ function classifyHoistableFields(
             fieldIndex, bitOffset, bits,
             mask: bits === 0 ? 0 : (1 << bits) - 1,
             variantTypes: [...unionType.variants.values()],
+            handle,
         })
         bitOffset += bits
     })
@@ -220,12 +214,13 @@ function classifyHoistableFields(
     return byField
 }
 
-const structEncodeRule = codecRule(pStructFields(pStar()), (match, _ctx: void, resolve) =>
+const structEncodeRule = codecRule(pStructFields(pStar()), (match, _ctx: void, resolve, s) =>
 {
-    const hoisted = classifyHoistableFields(match.fieldMatches, resolve)
+    // One slot serves every field — allocated once, outside the map.
+    const field = s.slot()
+    const hoisted = classifyHoistableFields(match.fieldMatches, i => field.enter(s.o0, i))
     const totalBits = [...hoisted.values()].reduce((sum, h) => sum + h.bits, 0)
     const bitmapBytes = Math.ceil(totalBits / 8)
-    const O_FIELD = 1 // scratch handle slot for whichever field is being processed
 
     return ir`
         ${hoisted.size === 0 
@@ -233,37 +228,37 @@ const structEncodeRule = codecRule(pStructFields(pStar()), (match, _ctx: void, r
             : ir`
             u32 bitmap = 0;
             ${[...hoisted.values()].map(h => ir`
-                enter(${O_FIELD}, 0, ${h.fieldIndex});
-                bitmap = bitmap | (tag(${O_FIELD}) << ${h.bitOffset});
+                ${h.handle.code}
+                bitmap = bitmap | (tag(${h.handle}) << ${h.bitOffset});
             `)}
-            write(0, ${bitmapBytes}, bitmap);
+            write(${s.i0}, ${bitmapBytes}, bitmap);
             `
         }
         ${match.fieldMatches.map((f, fieldIndex) =>
         {
             const hoist = hoisted.get(fieldIndex)
             if(!hoist)
-                return ir`call_codec(${resolve(f.type, undefined)}, 0, ${fieldIndex});`
+                return ir`call_codec(${resolve(f.type, undefined)}, ${s.o0}, ${fieldIndex});`
 
-            const cases = hoist.variantTypes.map((v, k) => ir`case ${k}: call_codec(${resolve(v, undefined)}, ${O_FIELD}, ${k}); break;`)
-            return ir`enter(${O_FIELD}, 0, ${fieldIndex}); switch (tag(${O_FIELD})) { ${cases} }`
+            const cases = hoist.variantTypes.map((v, k) => ir`case ${k}: call_codec(${resolve(v, undefined)}, ${hoist.handle}, ${k}); break;`)
+            return ir`${hoist.handle.code} switch (tag(${hoist.handle})) { ${cases} }`
         })}
     `
 })
 
-const structDecodeRule = codecRule(pStructFields(pStar()), (match, _ctx: void, resolve) =>
+const structDecodeRule = codecRule(pStructFields(pStar()), (match, _ctx: void, resolve, s) =>
 {
     // ── Meta: pure JS bookkeeping, no DSL text yet ──────────────────────
-    const hoisted = classifyHoistableFields(match.fieldMatches, resolve)
+    const field = s.slot()
+    const hoisted = classifyHoistableFields(match.fieldMatches, i => field.enter(s.o0, i))
     const totalBits = [...hoisted.values()].reduce((sum, h) => sum + h.bits, 0)
     const bitmapBytes = Math.ceil(totalBits / 8)
-    const O_FIELD = 1
 
     // ── DSL: the whole body, assembled in one place ─────────────────────
     return ir`
         ${hoisted.size === 0 
             ? ir`` 
-            : ir`u32 bitmap = 0; bitmap = read(0, ${bitmapBytes});`
+            : ir`u32 bitmap = 0; bitmap = read(${s.i0}, ${bitmapBytes});`
         }
 
         ${match.fieldMatches.map((f, fieldIndex) =>
@@ -272,13 +267,13 @@ const structDecodeRule = codecRule(pStructFields(pStar()), (match, _ctx: void, r
 
             return hoist 
                 ? (ir`
-                    enter(${O_FIELD}, 0, ${fieldIndex}); 
+                    ${hoist.handle.code} 
                     switch (${`(bitmap >> ${hoist.bitOffset}) & ${hoist.mask}`}) 
                     { 
-                        ${hoist.variantTypes.map((v, k) => ir`case ${k}: call_codec(${resolve(v, undefined)}, ${O_FIELD}, ${k}); break;`)} 
+                        ${hoist.variantTypes.map((v, k) => ir`case ${k}: call_codec(${resolve(v, undefined)}, ${hoist.handle}, ${k}); break;`)} 
                     }
                 `)
-                : ir`call_codec(${resolve(f.type, undefined)}, 0, ${fieldIndex});`
+                : ir`call_codec(${resolve(f.type, undefined)}, ${s.o0}, ${fieldIndex});`
         })}
     `
 })
