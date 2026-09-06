@@ -2,13 +2,13 @@
 
 ## Codec extension 
 
-- adopt TS side carriers for codec extension allocations in existing rules
-  - real targets: structEncodeRule/structDecodeRule (binary-rules.ts, hand-picked O_FIELD), delta-leb128's list walks, iso8601-demo
+- TS side carriers adopted where an id was hand-picked: struct rules, delta-leb128's walks, iso8601-demo
   - everywhere else a bare 0 is just o0/i0 — documentation value only, no collision to prevent
   
 - Crypto primitives (CRC, hash, MAC, cipher, AEAD) — design sketch in docs/crypto.md, nothing implemented.
   - No reserved opcodes remain; needs the extension-level escape docs/crypto.md §2.1 proposes.
   - Key material: host-bound key slot table, never an ISA value or an object handle (§5). Key establishment (DH) stays above this layer.
+
 - Quantities / units of measurement — design sketch in docs/quantities.md, nothing implemented.
 
 ## Target codegen
