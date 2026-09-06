@@ -11,7 +11,7 @@ import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
 import { ir, run, validateProgram } from "mog-core"
-import { struct, union, list, u8, u16, unit, buildTypeGraph, derefType, SemanticTypeKinds, pStructFields, pStar, pInteger } from "../../src/core/index"
+import { struct, union, list, u8, u16, unit, buildTypeGraph, derefType, SemanticTypeKinds, pStructFields, pStar, pInteger, pList } from "../../src/core/index"
 import { codecScope } from "../../src/codecs/engine/scope"
 import { buildCodec, codecRule } from "../../src/codecs/engine/resolver"
 import type { CodecRule } from "../../src/codecs/engine/resolver"
@@ -83,6 +83,20 @@ describe("codec scope — enter", () =>
         assert.equal(derefType(inner.type.type).kind, SemanticTypeKinds.Integer)
     })
 
+    test("enterNext walks a list's element type, which enter itself refuses", () =>
+    {
+        const s = codecScope(nodeOf(list(u8)))
+        const elem = s.slot().enterNext(s.o0)
+        assert.equal(elem.code.source.trim(), "enter_next(1, 0);")
+        assert.equal(derefType(elem.type.type).kind, SemanticTypeKinds.Integer)
+    })
+
+    test("enterNext rejects a non-list parent", () =>
+    {
+        const s = codecScope(nodeOf(struct({ a: u8 })))
+        assert.throws(() => s.slot().enterNext(s.o0), /list only/)
+    })
+
     test("rejects a list parent, an out-of-range ref, and a leaf parent", () =>
     {
         const listScope = codecScope(nodeOf(list(u8)))
@@ -149,6 +163,34 @@ describe("codec scope — §6's worked changes, run for real", () =>
             `
         })
         assert.deepEqual(encode([structRule]), [5, 5, 10])
+    })
+
+    test("a delta-leb128-shaped list walk: one slot, re-entered per element", () =>
+    {
+        const L = list(u8)
+        const listRule = codecRule(pList(pStar()), (_m, _c: void, _r, s) =>
+        {
+            const elem = s.slot()
+            const cursor = elem.enterNext(s.o0)
+            return ir`
+                u32 left = 0;
+                left = count(${s.o0});
+                write(${s.i0}, 1, left);
+                while (left != 0)
+                {
+                    ${cursor.code}
+                    write(${s.i0}, 1, load_val(${cursor}));
+                    left = left - 1;
+                }
+            `
+        })
+        const program = buildCodec(L, [listRule], undefined)
+        validateCodecHandles(program)
+        const buffer: number[] = []
+        const ext = createCodecExtension("encode", { container: { root: [7, 8, 9] }, key: "root", type: buildTypeGraph(L).root }, buffer)
+        validateProgram(program, ext)
+        assert.equal(run(program, ext).ok, true)
+        assert.deepEqual(buffer, [3, 7, 8, 9])
     })
 
     test("two independently-authored rules both allocating id 1 don't collide across the call", () =>

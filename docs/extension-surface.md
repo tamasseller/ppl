@@ -89,6 +89,12 @@ class Slot
     /** Navigate `parent`'s child `ref` into this slot. Pure — computes the
      *  child type and the `enter` text, emits nothing by itself. */
     enter(parent: Handle, ref: number): Handle
+
+    /** The list-element twin (codec-extension.md §3.4). Its text is not
+     *  idempotent — each execution advances the cursor — so it is spliced
+     *  once per element, inside the loop, from a handle built once
+     *  outside it. */
+    enterNext(parent: Handle): Handle
 }
 
 /** A slot, the type currently in it, and the `enter` that put it there. */

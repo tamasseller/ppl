@@ -2,12 +2,11 @@
 
 ## Codec extension 
 
-- clarify stream iterator & object lifecycle: allocation side in docs/extension-surface.md §7-8
-- TS side DSL upgrades: carriers implemented (src/codecs/engine/scope.ts); no existing rule adopts them yet
+- adopt TS side carriers for codec extension allocations in existing rules
+  
 - Crypto primitives (CRC, hash, MAC, cipher, AEAD) — design sketch in docs/crypto.md, nothing implemented.
   - No reserved opcodes remain; needs the extension-level escape docs/crypto.md §2.1 proposes.
   - Key material: host-bound key slot table, never an ISA value or an object handle (§5). Key establishment (DH) stays above this layer.
-
 - Quantities / units of measurement — design sketch in docs/quantities.md, nothing implemented.
 
 ## Target codegen

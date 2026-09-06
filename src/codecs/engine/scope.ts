@@ -62,6 +62,23 @@ export class Slot
 
         return handleOf(this, edge.target, ir`enter(${this}, ${parent}, ${ref});`)
     }
+
+    /** Navigate `parent`'s next element into this slot (codec-extension.md
+     *  §3.4's sequential access). Unlike `enter`, what this returns is not
+     *  idempotent: every execution advances the list cursor, so splice it
+     *  once per element — a loop body's first statement, not a value
+     *  re-spliced wherever the element is mentioned. */
+    enterNext(parent: SlotHandle): SlotHandle
+    {
+        const kind = parent.type.type.kind
+        if(kind !== SemanticTypeKinds.List)
+            throw new Error(`codec scope: can't enter_next a ${kind} — list only`)
+
+        const edge = parent.type.edges[0]
+        if(!edge) throw new Error("codec scope: list type has no element edge")
+
+        return handleOf(this, edge.target, ir`enter_next(${this}, ${parent});`)
+    }
 }
 
 function handleOf(slot: Slot, type: TypeNode, code: IrFragment): SlotHandle
