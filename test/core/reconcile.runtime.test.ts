@@ -1,6 +1,6 @@
 /**
  * src/core/test — Reconciliation (../src/reconcile.ts, docs/codec-
- * image.md §2/§3/§2.4, ROADMAP.md item 11)
+ * image.md §2/§3/§2.4)
  *
  * Covers `reconcile()`'s structural walk (matched/image-only/local-only,
  * kind-mismatch rejection, cycle safety on either side, and the sibling-

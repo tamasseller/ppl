@@ -1,5 +1,5 @@
 /**
- * core — Reconciliation (docs/codec-image.md §2/§3, ROADMAP.md item 11)
+ * core — Reconciliation (docs/codec-image.md §2/§3)
  *
  * Target- *and* codec-independent: this computes a mapping some codegen
  * consumes, but knows nothing about wire bytes, RTL, or any target

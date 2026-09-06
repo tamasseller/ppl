@@ -1,6 +1,6 @@
 /**
- * Runtime tests for declared default values (ROADMAP item 9,
- * docs/codec-image.md §4): `IntegerType.default`, `UnionType.defaultVariant`,
+ * Runtime tests for declared default values
+ * (docs/codec-image.md §4): `IntegerType.default`, `UnionType.defaultVariant`,
  * and `defaultValueOf`.
  *
  * Run via: npm test

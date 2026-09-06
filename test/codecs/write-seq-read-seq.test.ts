@@ -1,6 +1,6 @@
 /**
  * src/codecs/test — WRITE_SEQ / READ_SEQ, the bulk-array transfer pair
- * (ROADMAP.md item 11, engine/opcodes.ts, engine/codec-extension.ts,
+ * (docs/codec-extension.md §3.5, engine/opcodes.ts, engine/codec-extension.ts,
  * engine/validate-handles.ts, engine/wire.ts, components/binary-rules.ts)
  *
  * Four angles, mirroring how the existing 15 opcodes are each covered

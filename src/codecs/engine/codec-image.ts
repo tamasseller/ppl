@@ -1,6 +1,5 @@
 /**
- * codecs — Codec image container (docs/codec-image.md §7, ROADMAP.md
- * item 10)
+ * codecs — Codec image container (docs/codec-image.md §7)
  *
  * Three sections, concatenated with no framing between them at all — none
  * is needed, because each already knows its own length as it's produced:

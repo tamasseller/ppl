@@ -1,6 +1,6 @@
 /**
  * src/codecs/test — Type tree wire encoding (engine/type-tree-wire.ts,
- * docs/codec-image.md §6, ROADMAP.md item 10)
+ * docs/codec-image.md §6)
  *
  * Mirrors `wire.test.ts`'s own approach: representative exact-byte checks
  * for each opcode family, plus structural round trips (decode can't

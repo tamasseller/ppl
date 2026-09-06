@@ -97,7 +97,6 @@ a codec program runs on.
   belongs in each.
 - [docs/codec-extension.md](docs/codec-extension.md): the codec opcode
   vocabulary and its ABI.
-- [docs/ROADMAP.md](docs/ROADMAP.md): what is built, what is open.
 
 ## Commands
 

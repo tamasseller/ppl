@@ -1,12 +1,11 @@
 /**
- * codecs — Codec extension (ROADMAP.md item 7, docs/codec-extension.md)
+ * codecs — Codec extension (docs/codec-extension.md)
  *
  * Implements `mog-core`'s `Extension` hook for all 17 opcodes
  * `./opcodes.ts` names (§2/§3), plus `codecRules()`, their `ir\`...\`` DSL
  * surface. Lives here rather than `mog-core` because that package must
  * stay protocol-agnostic; conceptually it's still core infrastructure, not
- * a codec itself. The wire-level `codec` byte layout (§6, ROADMAP.md item
- * 8) lives in `./wire.ts`, wired in below as `Extension.codec`.
+ * a codec itself. The wire-level `codec` byte layout (§6) lives in `./wire.ts`, wired in below as `Extension.codec`.
  *
  * Direction (§2.1/§2.3) is a whole-program property, passed in once here.
  * It's read by `computeChild`'s union branch (decode instantiates a
@@ -195,7 +194,7 @@ export const CODEC_EFFECTS: Readonly<Record<CodecOpcode, ExtOpEffect<CodecExtIns
     // site's codec's arity itself.
     CALL_CODEC:      { tosDelta: 0, maxTransient: 0, writesAcc: true, calleeOf: instr => instr.ext === "CALL_CODEC" ? instr.calleeIndex : undefined },
     CALL_CODEC_NEXT: { tosDelta: 0, maxTransient: 0, writesAcc: true, calleeOf: instr => instr.ext === "CALL_CODEC_NEXT" ? instr.calleeIndex : undefined },
-    // ROADMAP.md item 11: bulk transfer of `acc` (the element count) many
+    // docs/codec-extension.md §3.5: bulk transfer of `acc` (the element count) many
     // elements between a stream iterator and a list handle's own array
     // storage — the "snatch point" a target codegen can specialize into a
     // raw-buffer/DMA copy; `exec()`'s own semantics are always the dumb
@@ -232,8 +231,7 @@ export const CODEC_EFFECTS: Readonly<Record<CodecOpcode, ExtOpEffect<CodecExtIns
  *  builder splices that argument's own tiled fragment in ahead of the
  *  opcode (`unaryNode`) rather than assuming the value is already sitting
  *  in `acc` by the time the call runs. `write_seq`/`read_seq` follow the
- *  same shape for their own dynamic operand, `count` (ROADMAP.md item
- *  11) — never a codegen-time literal, since it's a decoder's own decoded
+ *  same shape for their own dynamic operand, `count` (§3.5) — never a codegen-time literal, since it's a decoder's own decoded
  *  list length — while `iter`/`handle`/`width`/`signed` stay plain
  *  `pConst()` literals exactly like every other index/enum operand above.
  *
@@ -294,7 +292,7 @@ export function codecRules(_resolveLocal: (name: string) => number, resolveCalle
         }),
 
         // `write_seq(iter, handle, width, count)` / `read_seq(iter, handle,
-        // width, signed, count)` (ROADMAP.md item 11) — `count` is the one
+        // width, signed, count)` (§3.5) — `count` is the one
         // dynamic operand (a decoder's own decoded length, never known at
         // codegen time), so it's the trailing `pRtl("acc")` demand, exactly
         // like `write`'s value argument above; `iter`/`handle`/`width`
@@ -657,7 +655,7 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 return
             }
 
-            // ROADMAP.md item 11: bulk transfer, `acc` many elements, each
+            // docs/codec-extension.md §3.5: bulk transfer, `acc` many elements, each
             // `width` bytes, between `iter` and `handle`'s own array
             // storage. Always the dumb per-element pump loop here — the
             // "generic semantics first" half of §11's split; a target

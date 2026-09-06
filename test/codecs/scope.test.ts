@@ -1,6 +1,6 @@
 /**
  * src/codecs/test — TS-side authoring carriers (engine/scope.ts,
- * docs/extension-surface.md §5/§6)
+ * the workspace's docs/decisions.md)
  *
  * The unit half checks allocation and `enter`'s type computation; the
  * end-to-end half rebuilds §6's worked changes as real rules and runs the

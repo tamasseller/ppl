@@ -8,7 +8,7 @@
  * dispatch site — same `isCodecOpcode`/`assertNever` idiom) all dispatch
  * on — every op in §3, including the stream-fork
  * class (`HAS_NEXT`/`CLONE_RD`/`CLONE_WR`/`SEEK`) and the bulk-array
- * transfer pair (`WRITE_SEQ`/`READ_SEQ`, ROADMAP.md item 11). A typo in
+ * transfer pair (`WRITE_SEQ`/`READ_SEQ`, docs/codec-extension.md §3.5). A typo in
  * any one wouldn't be caught by anything otherwise (`ExtInstr.ext` is a
  * bare `string` — opaque to `mog-core` by design, isa-core.md §5.1);
  * `CodecOpcode` lets `EFFECTS` be typed `Record<CodecOpcode, ExtOpEffect>`

@@ -48,4 +48,4 @@ A two-phase, zero-allocation serialization compiler.
    parser and the metamodel AST need updating.
 3. Change only what the task needs. Provide the updated classes,
    interfaces or rules, not whole rewritten files.
-4. Check `docs/ROADMAP.md` for which subsystem is currently in flight.
+4. Check `docs/ARCHITECTURE.md` for which layer a change belongs in.

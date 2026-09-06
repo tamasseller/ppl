@@ -85,8 +85,8 @@ ir`
 `)
 
 // ── List<Integer> — the same length-prefixed layout, but the element run
-// itself goes through one WRITE_SEQ/READ_SEQ bulk transfer (ROADMAP.md
-// item 11) instead of `listEncodeRule`/`listDecodeRule`'s per-element
+// itself goes through one WRITE_SEQ/READ_SEQ bulk transfer (docs/codec-extension.md
+// §3.5) instead of `listEncodeRule`/`listDecodeRule`'s per-element
 // `call_codec_next` loop — no nested procedure call per element, and a
 // single recognizable op a target codegen's `raise.ts` pass can later
 // specialize into a raw-buffer/DMA copy. Placed ahead of the generic list

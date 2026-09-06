@@ -1,6 +1,6 @@
 /**
  * src/codecs/test — Codec image container (engine/codec-image.ts,
- * docs/codec-image.md §7, ROADMAP.md item 10)
+ * docs/codec-image.md §7)
  *
  * Proves the whole item-10 pipeline end to end: build real encoder/decoder
  * programs via `buildCodec`, wrap them with a type tree into an image,

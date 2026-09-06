@@ -82,7 +82,7 @@ export type Accessor =
         readonly count: (finishedValueExpr: string) => string
         readonly elementAt: (finishedValueExpr: string, indexExpr: string) => string
         /** Bulk sequential transfer (`WRITE_SEQ`/`READ_SEQ`,
-         *  ROADMAP.md item 11) — optional: only a list rule whose element
+         *  docs/codec-extension.md §3.5) — optional: only a list rule whose element
          *  is itself numeric ever receives one (the RTL only emits these
          *  ops for a `List<Integer>`-shaped node, `binary-rules.ts`'s
          *  `listOfIntegerEncodeRule`/`DecodeRule`), so a rule for any

@@ -1,6 +1,6 @@
 # Codec Extension ISA
 
-> **Status:** implemented, ROADMAP.md item 7, including §6's byte encoding
+> **Status:** implemented, including §6's byte encoding
 > and item 11's `WRITE_SEQ`/`READ_SEQ` bulk-array pair (§3.5). Specifies
 > the codec extension's opcodes, calling convention and encoding rules the
 > way isa-core.md specifies the generic core, plugging in purely through

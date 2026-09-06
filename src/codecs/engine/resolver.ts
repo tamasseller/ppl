@@ -142,7 +142,7 @@ export function createCodecResolver<Ctx>(
         fill: (placeholder, match, node, ctx, resolve) =>
         {
             // One scope per procedure — the lifetime both resources
-            // actually have (docs/extension-surface.md §5).
+            // actually have (codec-extension.md §2.1/§2.2).
             defineProc(placeholder, rule.produce(match, ctx, resolve, codecScope(node)))
         },
     }))

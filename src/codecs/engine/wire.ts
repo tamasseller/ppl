@@ -1,6 +1,6 @@
 /**
  * codecs — Wire-level encoding for the codec extension's own opcodes
- * (docs/codec-extension.md §6, ROADMAP.md item 7)
+ * (docs/codec-extension.md §6)
  *
  * `Extension.codec` (`ExtCodec`, `mog-core/extension.ts`) is the hook
  * `bytecode.ts` needs for every `EXT` instruction byte ≥128;
@@ -15,7 +15,7 @@
  * fresh guess per opcode. `ENTER`'s `ref` gets the same threshold for the
  * same reason (§6.2's "segment the common case" principle): every struct/
  * union in example's `TelemetryPacket` schema — the one real
- * schema this project measures against (ROADMAP.md item 7) — has ≤4
+ * schema this project measures against (ppl-example's TelemetryPacket) — has ≤4
  * fields/variants, so `ref < 4` covers every real case measured so far,
  * not just handle/iterator IDs.
  *
@@ -45,7 +45,7 @@
  * used 119 of the 128 available codes, leaving 9 (247..255) reserved and
  * unused per isa-core.md §5.3's "leave room, don't force a smaller
  * encoding to fill every slot" philosophy — `WRITE_SEQ`/`READ_SEQ`
- * (ROADMAP.md item 11) spend exactly that remaining budget (3 + 6 = 9
+ * (§3.5) spend exactly that remaining budget (3 + 6 = 9
  * codes: `w ∈ WIDTHS` alone for `WRITE_SEQ`, `w × signed` for `READ_SEQ`),
  * filling the codec extension's 128-code space exactly, with `iter`/
  * `handle` always LEB128'd on both (no compact index form — see
@@ -274,7 +274,7 @@ function callCodecNextBand(): Band
     }
 }
 
-/** `WRITE_SEQ iter, handle, w` (ROADMAP.md item 11) — `operands = [iter,
+/** `WRITE_SEQ iter, handle, w` (§3.5) — `operands = [iter,
  *  handle, w]`, `w ∈ WIDTHS`. `count` is *not* one of `ExtInstr`'s
  *  operands at all: codec-extension.ts's own DSL rule for `write_seq`
  *  takes it as a trailing `pRtl("acc")` demand (read from `acc` at
@@ -307,7 +307,7 @@ function writeSeqBand(): Band
     }
 }
 
-/** `READ_SEQ iter, handle, w, signed` (ROADMAP.md item 11) — `operands =
+/** `READ_SEQ iter, handle, w, signed` (§3.5) — `operands =
  *  [iter, handle, w, signed]`; `count` isn't an operand here either, same
  *  reason as `writeSeqBand` above. `w` and `signed` both fold into the
  *  opcode byte (`WIDTHS.length * 2` codes — the last of the 9 codes this

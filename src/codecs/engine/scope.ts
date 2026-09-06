@@ -1,20 +1,23 @@
 /**
- * codecs — TS-side authoring carriers (docs/extension-surface.md §5)
+ * codecs — TS-side authoring carriers
+ *
+ * Why the DSL grammar stays frozen and these live in TS instead: the
+ * workspace's docs/decisions.md, "Where an extension's authoring
+ * ergonomics live".
  *
  * Resource ids a rule must not collide on come from here rather than from
  * hand-picked constants in fragment text. Every carrier is **pure**: it
  * yields ids and `enter` text, never emits an instruction as a side
  * effect, so DSL statement order stays a property of the template and not
- * of TS evaluation order (§5).
+ * of TS evaluation order.
  *
  * One `CodecScope` per procedure, which is exactly the lifetime both
  * resources have: handle slots and stream forks are frame-scoped
  * (codec-extension.md §2.1/§2.2), ids restarting in every callee.
  *
- * Two names differ from the doc, each because the bare one is already
- * taken by something else in this package's public surface: `SlotHandle`
- * for the doc's `Handle` (codec-extension.ts's runtime object binding),
- * and `IterId` for its `Iter` (target-js's runtime iterator state).
+ * `SlotHandle` and `IterId` are spelled that way because the bare names
+ * are taken: `Handle` by codec-extension.ts's runtime object binding,
+ * `Iter` by target-js's runtime iterator state.
  */
 
 import type { IrFragment } from "mog-core"
@@ -96,7 +99,7 @@ export interface CodecScope
 }
 
 /** A scope for a procedure whose `o0` is bound to `entry` (§4's codec
- *  entry protocol). Ids go monotonic, with no block-scoped reclaim (§8). */
+ *  entry protocol). Ids go monotonic, with no block-scoped reclaim. */
 export function codecScope(entry: TypeNode): CodecScope
 {
     let slots = 0

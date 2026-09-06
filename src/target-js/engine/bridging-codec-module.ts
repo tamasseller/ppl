@@ -1,6 +1,6 @@
 /**
  * target-js — Bridging a received codec image to a local schema
- * (docs/codec-image.md §2/§3, ROADMAP.md item 12).
+ * (docs/codec-image.md §2/§3).
  *
  * `codec-module.ts`'s `generateCodecModule` compiles a `buildCodec`-built
  * program against the *same* schema it was built from — every procedure

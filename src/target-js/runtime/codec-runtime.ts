@@ -266,7 +266,7 @@ export function signExtend(bits: number, raw: number): number
     return raw >= signBit ? raw - 2 ** bits : raw
 }
 
-/** ROADMAP.md item 11's "snatch point": the per-element pump loop here
+/** codec-extension.md §3.5's "snatch point": the per-element pump loop here
  *  matches codec-extension.ts's own WRITE_SEQ exec() case in spirit — a
  *  target codegen recognizing this op is free to specialize it into a
  *  raw-buffer/DMA copy, but this module doesn't (a straightforward,

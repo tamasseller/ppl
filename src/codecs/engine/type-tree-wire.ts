@@ -1,6 +1,5 @@
 /**
- * codecs — Type tree wire encoding (docs/codec-image.md §6, ROADMAP.md
- * item 10)
+ * codecs — Type tree wire encoding (docs/codec-image.md §6)
  *
  * A postorder stack machine, not a table of nodes with pointers (§6.1):
  * `ENTER`/`CALL_CODEC`'s own `ref` addressing is already local/positional

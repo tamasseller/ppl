@@ -2,7 +2,7 @@
 
 > **Status:** implemented. §6 (type tree wire encoding) and §7 (container
 > layout) are `src/codecs/engine/type-tree-wire.ts` and
-> `engine/codec-image.ts` (ROADMAP.md item 10). §2/§3's reconciliation is
+> `engine/codec-image.ts`. §2/§3's reconciliation is
 > `src/core/reconcile.ts` (item 11), and `target-js`'s
 > `engine/bridging-codec-module.ts` is its first consuming codegen (item
 > 12). Builds on docs/codec-extension.md throughout:
@@ -325,8 +325,7 @@ constructs its own `integer(0, 255, d)` value, which already gets its own
 `TypeNode`. `struct()`/`union()` keep building a plain
 `Map<string, SemanticType>`.
 
-**What it is, per kind** (implemented in `src/core/metamodel.ts`,
-ROADMAP.md item 9):
+**What it is, per kind** (implemented in `src/core/metamodel.ts`):
 
 - **Integer**: a third constructor parameter, `default = 0`
   (`IntegerType.default: number`). Every existing constant (`u8`, `i16`,
@@ -379,8 +378,8 @@ answer.
   bridge (§2.1) and changes nothing about the bytecode's shape or
   addressing.
 
-It carries no per-resource peak-usage stats (ROADMAP.md item 8: nothing
-consumes them, and this domain wants maximum compactness) and no
+It carries no per-resource peak-usage stats (codec-extension.md §7.2:
+nothing consumes them, and this domain wants maximum compactness) and no
 per-procedure header data beyond the entry's root type (codec-extension.md
 §2.4: every other handle's type is derived, never declared).
 
@@ -489,6 +488,12 @@ The table belongs to the type tree section, not the container: the two
 programs carry no names at all, addressing everything positionally via
 `ref` (§6.1), and reconciliation's name matching (§2.1) only ever touches
 the *decoded* tree.
+
+These names and a type's *own* declared name (`metamodel.ts`'s
+`named()`/`nameOf()`) are separate namespaces. Field and variant names
+travel in the image because reconciliation matches by them; a type's own
+name is a build-time convenience — codegen labeling, rule matching via
+`pNamed` — and never crosses the wire.
 
 **Name specification.** `STRUCT`/`UNION` reference the string table as a
 list of *ranges*, read until it has supplied exactly as many names as the

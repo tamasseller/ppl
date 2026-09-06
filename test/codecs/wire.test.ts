@@ -1,6 +1,6 @@
 /**
  * src/codecs/test — Wire-level encoding for the codec extension's opcodes
- * (engine/wire.ts, docs/codec-extension.md §6, ROADMAP.md item 7)
+ * (engine/wire.ts, docs/codec-extension.md §6)
  *
  * Mirrors `mog-core/test/bytecode.test.ts`'s own two-pronged approach:
  * a literal table of representative bytes (one row per band variant —
@@ -101,7 +101,7 @@ const rows: Row[] = [
     { byte: 246, instr: callCodecNextInstr(9, 4) },
 
     // WRITE_SEQ iter, handle, width — base 247, one code per width
-    // (ROADMAP.md item 11): iter/handle always LEB128'd, never a compact
+    // (codec-extension.md §3.5): iter/handle always LEB128'd, never a compact
     // index form (this file's own header explains why). No `count`
     // operand — it's a trailing pRtl("acc") DSL demand, read from `acc`
     // at runtime, never part of the instruction itself.
