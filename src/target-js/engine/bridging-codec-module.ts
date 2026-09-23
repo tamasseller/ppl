@@ -1,6 +1,6 @@
 /**
  * target-js — Bridging a received codec image to a local schema
- * (docs/codec-image.md §2/§3).
+ * (docs/reconciliation.md §4).
  *
  * `codec-module.ts`'s `generateCodecModule` compiles a `buildCodec`-built
  * program against the *same* schema it was built from — every procedure
@@ -10,7 +10,7 @@
  * decoder programs were compiled by a different, independently-built
  * party, against *its* schema (the "image" tree) — the bytecode's own
  * `ENTER`/`CALL_CODEC` `ref` operands stay positional into that tree
- * forever (codec-image.md §2.1), never rewritten, while the *local*
+ * forever (reconciliation.md §4.1), never rewritten, while the *local*
  * schema this call actually wants to bridge to may have added, dropped, or
  * defaulted fields/variants relative to it.
  *
@@ -100,7 +100,7 @@ export interface BridgingCodecModuleOptions
     readonly name: string
     /** A received codec image (`codecs`'s `decodeCodecImage`) — its
      *  own `typeTree`/`encoderProgram`/`decoderProgram`, untouched by
-     *  reconciliation (codec-image.md §2.1: the bytecode's own addressing
+     *  reconciliation (reconciliation.md §4.1: the bytecode's own addressing
      *  never changes). */
     readonly image: CodecImage
     /** The consumer's own, independently-built schema — what every
@@ -128,7 +128,7 @@ export function generateBridgingCodecModule(opts: BridgingCodecModuleOptions): s
 
     const imageGraph = buildTypeGraph(image.typeTree)
     const localGraph = buildTypeGraph(localType)
-    // Throws on a root kind mismatch (docs/codec-image.md §2.2) — correct:
+    // Throws on a root kind mismatch (docs/reconciliation.md §4.3) — correct:
     // nothing to bridge otherwise. Always "matched" past that point (both
     // roots are real `TypeNode`s by construction).
     const root = reconcile(imageGraph.root, localGraph.root)

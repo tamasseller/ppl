@@ -1,14 +1,14 @@
 /**
- * codecs — Codec image container (docs/codec-image.md §7)
+ * codecs — Codec image container (docs/codec-image.md §4)
  *
  * Three sections, concatenated with no framing between them at all — none
  * is needed, because each already knows its own length as it's produced:
- * the type tree (§6, self-framing via `END`), the encoder program, and the
+ * the type tree (§3, self-framing via `END`), the encoder program, and the
  * decoder program (both via `mog-core`'s item-8 program envelope,
  * self-framing via its own header table). Decode reads the three in order,
  * each consuming exactly its own bytes and handing back the next offset.
  *
- * Reconciliation (docs/codec-image.md §2/§3) — matching a received image's
+ * Reconciliation (docs/reconciliation.md §4) — matching a received image's
  * type tree against a consumer's own, independently-built one — is not
  * implemented here; this module only round-trips the container itself.
  */
@@ -29,7 +29,7 @@ export interface CodecImage
 
 const EXTENSION = { codec: codecWireCodec }
 
-/** Encode a codec image (§7): type tree, then encoder program, then
+/** Encode a codec image (§4): type tree, then encoder program, then
  *  decoder program, concatenated. */
 export function encodeCodecImage(image: CodecImage): Uint8Array
 {
@@ -40,7 +40,7 @@ export function encodeCodecImage(image: CodecImage): Uint8Array
     ])
 }
 
-/** Decode a codec image (§7) — the mirror of `encodeCodecImage`, reading
+/** Decode a codec image (§4) — the mirror of `encodeCodecImage`, reading
  *  the three sections in order off each other's reported `next` offset. */
 export function decodeCodecImage(bytes: Uint8Array): CodecImage
 {

@@ -1,12 +1,12 @@
 /**
- * src/core/test — Reconciliation (../src/reconcile.ts, docs/codec-
- * image.md §2/§3/§2.4)
+ * src/core/test — Reconciliation (../src/reconcile.ts, docs/
+ * reconciliation.md §4)
  *
  * Covers `reconcile()`'s structural walk (matched/image-only/local-only,
  * kind-mismatch rejection, cycle safety on either side, and the sibling-
  * sharing case that proves names live on the edge, not the node) and
- * `resolve()`'s direction-aware interpretation of it — all eight §3 rule
- * cells from §2.4's table, including the two "unreachable" ones a union's
+ * `resolve()`'s direction-aware interpretation of it — all eight
+ * cells of §4.4/§4.5's tables, including the two "unreachable" ones a union's
  * own selection mechanism rules out structurally.
  */
 
@@ -63,7 +63,7 @@ describe("reconcile(): matched trees", () =>
     })
 })
 
-describe("reconcile(): kind mismatch is rejected (§2.2)", () =>
+describe("reconcile(): kind mismatch is rejected (§4.3)", () =>
 {
     test("an integer field becoming a struct throws", () =>
     {
@@ -176,27 +176,27 @@ describe("reconcile(): cycle safety", () =>
     })
 })
 
-describe("resolve(): struct field — all four cells are real (§2.4 table)", () =>
+describe("resolve(): struct field — all four cells are real (§4.4 table)", () =>
 {
-    test("image-only field, decode → drop (§3.2)", () =>
+    test("image-only field, decode → drop (§4.4)", () =>
     {
         const c = reconcile(root(struct({ extra: u8 })), root(struct({})))
         assert.deepEqual(resolve(c, edgeOf(c, "extra"), "decode"), { action: "drop" })
     })
 
-    test("image-only field, encode → default from the image (§3.3)", () =>
+    test("image-only field, encode → default from the image (§4.4)", () =>
     {
         const c = reconcile(root(struct({ extra: integer(0, 255, 7) })), root(struct({})))
         assert.deepEqual(resolve(c, edgeOf(c, "extra"), "encode"), { action: "default", value: 7 })
     })
 
-    test("local-only field, decode → default from local (§3.1)", () =>
+    test("local-only field, decode → default from local (§4.4)", () =>
     {
         const c = reconcile(root(struct({})), root(struct({ extra: integer(0, 255, 9) })))
         assert.deepEqual(resolve(c, edgeOf(c, "extra"), "decode"), { action: "default", value: 9 })
     })
 
-    test("local-only field, encode → drop (§3.4, additive)", () =>
+    test("local-only field, encode → drop (§4.4)", () =>
     {
         const c = reconcile(root(struct({})), root(struct({ extra: u8 })))
         assert.deepEqual(resolve(c, edgeOf(c, "extra"), "encode"), { action: "drop" })
@@ -219,9 +219,9 @@ describe("resolve(): struct field — all four cells are real (§2.4 table)", ()
     })
 })
 
-describe("resolve(): union variant — only two of four cells are reachable (§2.4 table)", () =>
+describe("resolve(): union variant — only two of four cells are reachable (§4.5 table)", () =>
 {
-    test("image-only variant, decode, local declares a default variant → default (§3.2)", () =>
+    test("image-only variant, decode, local declares a default variant → default (§4.5)", () =>
     {
         const image = root(struct({ tag: union({ known: unit, extra: unit }) }))
         const local = root(struct({ tag: union({ known: unit, unrecognized: unit }, "unrecognized") }))
@@ -231,7 +231,7 @@ describe("resolve(): union variant — only two of four cells are reachable (§2
         assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "decode"), { action: "default", value: defaultValueOf(tag.localNode!.type) })
     })
 
-    test("image-only variant, decode, local declares NO default variant → trap (§3.2)", () =>
+    test("image-only variant, decode, local declares NO default variant → trap (§4.5)", () =>
     {
         const image = root(struct({ tag: union({ known: unit, extra: unit }) }))
         const local = root(struct({ tag: union({ known: unit }) }))
@@ -250,7 +250,7 @@ describe("resolve(): union variant — only two of four cells are reachable (§2
         assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "encode"), { action: "unreachable" })
     })
 
-    test("local-only variant, encode → trap, no wire representation (§3.4)", () =>
+    test("local-only variant, encode → trap, no wire representation (§4.5)", () =>
     {
         const image = root(struct({ tag: union({ known: unit }) }))
         const local = root(struct({ tag: union({ known: unit, extra: unit }) }))

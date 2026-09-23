@@ -1,6 +1,6 @@
 /**
  * Runtime tests for declared default values
- * (docs/codec-image.md §4): `IntegerType.default`, `UnionType.defaultVariant`,
+ * (docs/reconciliation.md §2.4): `IntegerType.default`, `UnionType.defaultVariant`,
  * and `defaultValueOf`.
  *
  * Run via: npm test

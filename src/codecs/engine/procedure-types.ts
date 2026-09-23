@@ -200,7 +200,7 @@ export function resolveProcedureTypes(program: RtlProgram<CodecExtInstr>, rootTy
 
 // ─────────────────────────────────────────────────────────────────────────
 // Correspondence-aware navigation — for a target codegen bridging a
-// received codec image to a local schema (docs/codec-image.md §2/§3,
+// received codec image to a local schema (docs/reconciliation.md §4,
 // `reconcile.ts`). Mirrors everything above exactly, one level up: where
 // `childNode`/`nextNode`/`resolveHandleTypes` navigate a single `TypeNode`
 // tree, these navigate a `Correspondence` tree instead — same shape, same
@@ -235,7 +235,7 @@ export function correspondenceElement(parent: Correspondence): Correspondence
 /** Recovers the field/variant *name* a `ref` operand addresses, off the
  *  image side of `srcCorrespondence` — the bytecode's own `ref` operands
  *  stay positional into the *image* tree regardless of reconciliation
- *  (docs/codec-image.md §2.1), so this is the one place that positional
+ *  (docs/reconciliation.md §4.1), so this is the one place that positional
  *  index has to be translated into the name {@link correspondenceChild}
  *  actually looks up by. */
 function nameOfRef(srcCorrespondence: Correspondence, ref: number, opName: string): string

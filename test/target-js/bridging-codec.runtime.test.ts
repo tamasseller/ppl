@@ -1,11 +1,11 @@
 /**
  * src/target-js/test — Bridging a received codec image to a local schema
- * (engine/bridging-codec-module.ts, docs/codec-image.md §2/§3)
+ * (engine/bridging-codec-module.ts, docs/reconciliation.md §4)
  *
  * Each test builds an "image" schema and a deliberately different "local"
  * schema, compiles the image's own program via `generateBridgingCodecModule`
  * against the local one, and checks the generated, compiled, *executed*
- * behavior against docs/codec-image.md §3's own resolution table — not a
+ * behavior against docs/reconciliation.md §4.4/§4.5's tables — not a
  * shape check on `Correspondence`/`Resolution` (that's
  * `procedure-types.test.ts`'s job, `codecs`), but proof the whole
  * chain (reconcile → resolve → codegen → real JS) produces the right
@@ -59,7 +59,7 @@ describe("bridging: nothing to bridge — byte-identical to the ordinary (non-br
     })
 })
 
-describe("bridging: struct, image-only field (§3.2 decode / §3.3 encode)", () =>
+describe("bridging: struct, image-only field (§4.4)", () =>
 {
     const Image = named("Widget", struct({ a: u8, extra: integer(0, 255, 42) }))
     const Local = named("Widget", struct({ a: u8 }))
@@ -85,7 +85,7 @@ describe("bridging: struct, image-only field (§3.2 decode / §3.3 encode)", () 
     })
 })
 
-describe("bridging: struct, local-only field (§3.1 decode / §3.4 encode)", () =>
+describe("bridging: struct, local-only field (§4.4)", () =>
 {
     const Image = named("Widget", struct({ a: u8 }))
     const Local = named("Widget", struct({ a: u8, extra: integer(0, 255, 7) }))
@@ -128,7 +128,7 @@ describe("bridging: struct, local-only field (§3.1 decode / §3.4 encode)", () 
     })
 })
 
-describe("bridging: union, image-only variant (§3.2 decode) / local-only variant (§3.4 encode)", () =>
+describe("bridging: union, image-only variant (decode) / local-only variant (encode) (§4.5)", () =>
 {
     const Image = named("Status", union({ ok: u8, err: u8 }))
 

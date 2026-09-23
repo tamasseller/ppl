@@ -28,7 +28,7 @@ export interface IntegerType
     max: number
     /** Value a decoder/encoder substitutes when this field/variant has no
      *  source value of its own on one side of a reconciled pair of trees
-     *  (docs/codec-image.md §3.1/§3.3). Always concrete — every integer
+     *  (docs/reconciliation.md §4.4). Always concrete — every integer
      *  has a default, `0` unless the constructor was given a third
      *  argument. A field needing a non-zero default doesn't reuse a
      *  shared constant like `u8`; it constructs its own `integer(min,
@@ -56,7 +56,7 @@ export interface UnionType
     kind: SemanticTypeKinds.Union
     variants: Map<string, SemanticType>
     /** Name of the variant `defaultValueOf` (and a decoder reconciling
-     *  against a narrower image tree, docs/codec-image.md §3.2) falls
+     *  against a narrower image tree, docs/reconciliation.md §4.5) falls
      *  back to. Opt-in and restricted to a `unit`-valued variant (so it
      *  never needs a payload of its own) — a union with no natural
      *  fallback (e.g. an instruction-opcode-style enum) simply doesn't
@@ -140,7 +140,7 @@ export const union = (def: {[k: string]: SemanticType}, defaultVariant?: string)
  * schema author hand-rolling a union and hoping they used the same two
  * variant names those rules match on. `"empty"` is the declared
  * `defaultVariant` for free, so a decoder reconciling against a narrower
- * image tree (docs/codec-image.md §3.2) falls back to "absent" without the
+ * image tree (docs/reconciliation.md §4.5) falls back to "absent" without the
  * schema author declaring anything extra.
  */
 export const optional = (T: SemanticType): UnionType => union({value: T, empty: unit}, "empty")
@@ -148,7 +148,7 @@ export const optional = (T: SemanticType): UnionType => union({value: T, empty: 
 /**
  * The value a decoder/encoder substitutes when a field/variant has no
  * source value of its own on one side of a reconciled pair of trees
- * (docs/codec-image.md §3.1/§3.3): `undefined` for `unit` (no data to
+ * (docs/reconciliation.md §4.4): `undefined` for `unit` (no data to
  * default), the type's own `default` for an integer, `[]` for a list
  * (an unfilled list is simply empty, never a declared value), the
  * field-by-field composition of its own fields' defaults for a struct,
@@ -159,7 +159,7 @@ export const optional = (T: SemanticType): UnionType => union({value: T, empty: 
  * type-tree author who never needs this union's default (e.g. it's never
  * the type of a field only one side of a reconciled pair declares) never
  * has to declare one; the failure only surfaces once this is actually
- * asked for, which docs/codec-image.md §4 fixes as a build/codegen-time
+ * asked for, which docs/reconciliation.md §2.4 fixes as a build/codegen-time
  * error, not a per-message runtime trap.
  */
 // — First-class type names ————————————————————————————————
@@ -170,7 +170,7 @@ export const optional = (T: SemanticType): UnionType => union({value: T, empty: 
 // for codegen labeling (`target-js`'s `nameOf`) and for
 // `matcher.ts`'s `pNamed()` rule-matching. Deliberately a different
 // namespace from a struct/union's field/variant names: those travel on
-// the wire (docs/codec-image.md §6.3); a type's own name never does.
+// the wire (docs/codec-image.md §3.3); a type's own name never does.
 
 const NAME = Symbol("name")
 

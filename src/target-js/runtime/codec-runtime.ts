@@ -29,9 +29,9 @@
  *  the way `codec-extension.ts`'s own TAG case does it, and never a
  *  `Handle`-carrying one either.
  *
- *  `variantNames` stays image-side unconditionally (docs/codec-image.md
- *  §2.2), so a not-found name is exactly the union/local-only/encode trap
- *  (§3.4) once bridging is active — `CodecTrap`, not a plain `Error`,
+ *  `variantNames` stays image-side unconditionally (docs/reconciliation.md
+ *  §4.1), so a not-found name is exactly the union/local-only/encode trap
+ *  (§4.5) once bridging is active — `CodecTrap`, not a plain `Error`,
  *  for the same reason every other bridging trap join point uses one
  *  (`codec-codegen-ext.ts`'s `emitCallCodec`). In a non-reconciled
  *  program the two lists are always the same node's own, so this stays
@@ -407,8 +407,8 @@ export function revBits(x: number): number
 
 export class CodecTrap extends Error
 {
-    /** `reason`, when given, is a bridging-specific trap (docs/codec-
-     *  image.md §3) — reconciliation's own `resolve()` (`codecs`)
+    /** `reason`, when given, is a bridging-specific trap (docs/reconciliation.md
+     *  §4) — reconciliation's own `resolve()` (`codecs`)
      *  already produces a human-readable reason string, never a numeric
      *  RTL trap code (there's no RTL `TRAP` instruction behind one of
      *  these at all — the generated code raises it directly). `code`

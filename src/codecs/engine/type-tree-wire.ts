@@ -1,7 +1,7 @@
 /**
- * codecs — Type tree wire encoding (docs/codec-image.md §6)
+ * codecs — Type tree wire encoding (docs/codec-image.md §3)
  *
- * A postorder stack machine, not a table of nodes with pointers (§6.1):
+ * A postorder stack machine, not a table of nodes with pointers (§3.1):
  * `ENTER`/`CALL_CODEC`'s own `ref` addressing is already local/positional
  * (codec-extension.md §2.4), so nothing downstream of decode cares how
  * this section represents the tree internally — only that decode hands
@@ -15,7 +15,7 @@
  * for the overwhelming majority of realistic values. `0xC0`-`0xFF` is
  * everything else (leaves, `LIST`, the `_EXT` escapes, `END`), plain
  * sequential tags — there's no per-node recurrence to exploit there, so a
- * byte per tag is already at floor. See §6.2 for the full table.
+ * byte per tag is already at floor. See §3.2 for the full table.
  */
 
 import {
@@ -103,13 +103,13 @@ function encodeInteger(t: IntegerType): number[]
     return [PUSH_INT_EXT, ...encodeSigned(t.min), ...encodeSigned(t.max), ...encodeSigned(t.default)]
 }
 
-// ── String table + name specification (§6.3) ────────────────────────────
+// ── String table + name specification (§3.3) ────────────────────────────
 
 /** `(base << 1) | 1` for a single name; `(length - 2) << 1` then `base`
  *  for a run of `length ≥ 2` consecutive indices — self-terminating
  *  against the caller-known total count, no range-count operand needed.
  *  Given a fixed table order, greedily merging every numerically-adjacent
- *  pair of indices is already optimal (§6.3) — no search required. */
+ *  pair of indices is already optimal (§3.3) — no search required. */
 function encodeNameSpec(indices: readonly number[]): number[]
 {
     const bytes: number[] = []
@@ -151,7 +151,7 @@ function decodeNameSpec(bytes: Uint8Array, offset: number, count: number, names:
 
 // ── Encode ───────────────────────────────────────────────────────────────
 
-/** Encode a semantic type tree (docs/codec-image.md §6). */
+/** Encode a semantic type tree (docs/codec-image.md §3). */
 export function encodeTypeTree(root: SemanticType): Uint8Array
 {
     const names: string[] = []
@@ -172,7 +172,7 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
     // than the first occurrence's real construction bytes — a
     // byte-content key would see those as different, missing the dedup
     // entirely for anything with children (structurally identical leaves
-    // still would have matched, but this file's own §6.4 spec explicitly
+    // still would have matched, but this file's own §3.4 spec explicitly
     // wants composite reuse caught too, e.g. two independently-written
     // `struct({a: u8, b: unit})` calls). Signature keying sidesteps that:
     // it's a pure function of shape, never of *where* a subtree sits.
@@ -259,9 +259,9 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
 
 // ── Decode ───────────────────────────────────────────────────────────────
 
-/** Decode a semantic type tree from `offset` (docs/codec-image.md §6).
+/** Decode a semantic type tree from `offset` (docs/codec-image.md §3).
  *  `next` is the offset immediately after `END` — the caller's cue for
- *  where the following container section (§7) starts. */
+ *  where the following container section (§4) starts. */
 export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: SemanticType; next: number }
 {
     let pos = offset

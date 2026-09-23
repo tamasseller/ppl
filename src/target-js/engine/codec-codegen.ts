@@ -267,7 +267,7 @@ function translateStmts(stmts: readonly Stmt<CodecExtInstr>[], entryNode: TypeNo
  *  produced for the public declarations — this is what supplies every
  *  `Accessor` this module consults, keyed by `TypeNode.id`.
  *
- *  `entryCorrespondence`, when given (docs/codec-image.md §2 — bridging a
+ *  `entryCorrespondence`, when given (docs/reconciliation.md §4 — bridging a
  *  received codec image to a local schema), is this procedure's own
  *  boundary `Correspondence` — `entryNode` stays the *image* node
  *  unconditionally either way (wire-format concerns, unaffected by
@@ -327,7 +327,7 @@ export function generateProcedure(
     }
 
     // A procedure boundary reached entirely through image-only navigation
-    // (docs/codec-image.md §2/§3) has no local representation at all — no
+    // (docs/reconciliation.md §4) has no local representation at all — no
     // `TSTypeDecl` to name a real declared type from, so its own
     // parameter/return type is `any` (there is no local type to mean).
     let ref: string

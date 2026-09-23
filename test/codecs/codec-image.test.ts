@@ -1,6 +1,6 @@
 /**
  * src/codecs/test — Codec image container (engine/codec-image.ts,
- * docs/codec-image.md §7)
+ * docs/codec-image.md §4)
  *
  * Proves the whole item-10 pipeline end to end: build real encoder/decoder
  * programs via `buildCodec`, wrap them with a type tree into an image,
@@ -62,7 +62,7 @@ describe("codec image — container round trip", () =>
         // Bodies/argCounts, not headers: a procedure's own header (the
         // codec extension's `o0` TypeNode) is a build/validate-time-only
         // handoff that never survives wire encoding at all (item 7/8's own
-        // finding, docs/codec-image.md §5) — decoded procedures always
+        // finding, docs/codec-image.md §2) — decoded procedures always
         // come back with `header: undefined`, by design, not a bug here.
         const image: CodecImage = {
             typeTree: u8,

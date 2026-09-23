@@ -1,6 +1,6 @@
 /**
  * src/codecs/test — Type tree wire encoding (engine/type-tree-wire.ts,
- * docs/codec-image.md §6)
+ * docs/codec-image.md §3)
  *
  * Mirrors `wire.test.ts`'s own approach: representative exact-byte checks
  * for each opcode family, plus structural round trips (decode can't
@@ -170,7 +170,7 @@ describe("type tree wire — struct / union, compact form", () =>
     })
 })
 
-describe("type tree wire — name specification (§6.3 range list)", () =>
+describe("type tree wire — name specification (§3.3 range list)", () =>
 {
     test("fresh (never-seen) field names land in the string table as one contiguous run in the name-spec", () =>
     {

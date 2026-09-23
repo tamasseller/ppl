@@ -75,7 +75,7 @@ export interface GenCtx
      *  counter, not a per-slot key, since a `CALL_CODEC`'s own result has
      *  no slot number of its own until it's written back. */
     readonly tempCounter: {n: number}
-    /** Per-slot `Correspondence` (docs/codec-image.md §2, `core`'s
+    /** Per-slot `Correspondence` (docs/reconciliation.md §4, `core`'s
      *  `reconcile`) — set only when this program is being compiled against
      *  a reconciled local schema rather than its own, i.e. this whole field
      *  is absent/empty for every ordinary (non-bridging) call, which is the
@@ -152,17 +152,17 @@ function scratchAccessorFor(kind: SemanticTypeKinds): Accessor
 
 /**
  * Recursively synthesizes a JS expression for `node`'s own declared
- * default (docs/codec-image.md §4) — driven entirely by `accessorOf`
+ * default (docs/reconciliation.md §2.4) — driven entirely by `accessorOf`
  * rather than by walking `defaultValueOf`'s own pre-flattened plain-JS
  * value, so the result is representation-faithful (e.g. a bigint rule's
  * own conversion, or a class rule's own constructor) wherever `accessorOf`
  * points at a real rule's own `Accessor` — never a raw object literal
  * that would silently be the *wrong* shape for an alternative rule.
  * `accessorOf` is the caller's own choice of *which* accessor a given
- * node's default should be built through: the real local one for §3.1's
+ * node's default should be built through: the real local one for §4.4's
  * "default from local" (decode, local-only field — `emitEnter`/
  * `emitEnterNext`'s own `injectLocalOnlyDefaults`), the trivial scratch
- * one for §3.3's "default from image" (encode, image-only field: there is
+ * one for §4.4's "default from image" (encode, image-only field: there is
  * no local representation for it at all).
  *
  * A struct's own accumulator needs real statements (`beginStruct`/
@@ -217,7 +217,7 @@ function emitDefaultValue(node: TypeNode, accessorOf: (n: TypeNode) => Accessor,
 }
 
 /** For every local-only field on a `"matched"` struct correspondence
- *  (docs/codec-image.md §3.1, decode only — encode's own mirror, §3.4, is
+ *  (docs/reconciliation.md §4.4, decode only — encode's own mirror is
  *  free: the image-derived bytecode simply never writes a local-only
  *  field at all, so there's nothing to inject or suppress there), seed it
  *  with its own declared default right after the struct's own accumulator
@@ -342,7 +342,7 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
                 // (whatever the rule actually stores); variantNamesOf
                 // stays image-side unconditionally — tagOf's own comparison
                 // set is always the image's own wire-declared variant
-                // order, reconciled or not (docs/codec-image.md §2.2).
+                // order, reconciled or not (docs/reconciliation.md §4.1).
                 const node = requireSlotNode(g.slotTypes, e.src, "TAG")
                 const activeName = expectAccessor(localAccessorFor(e.src, g), "union", node).activeVariantName(`v${e.src}`)
                 return `tagOf(${activeName}, ${JSON.stringify(variantNamesOf(node))})`
@@ -439,14 +439,14 @@ function emitEnter(dst: number, src: number, ref: number, g: GenCtx, b: LineBuil
     const name = (edge.step as {field: string}).field
     g.slotTypes.set(dst, edge.target)
 
-    // Bridging (docs/codec-image.md §2/§3): a struct field's own edge is
+    // Bridging (docs/reconciliation.md §4): a struct field's own edge is
     // either "matched" (bridge — everything below is unaffected), an
     // image-only field on decode (drop — still read/skipped normally
     // below, never written back anywhere real), or an image-only field on
     // encode (default — the wire still needs real bytes at this position,
     // substituted from the image's own declared default; a local-only
     // field never reaches this function at all — there's no image-side
-    // ref for one to navigate by in the first place, §3.4/§3.1's own
+    // ref for one to navigate by in the first place, §4.4's own
     // "nothing to hook into" reasoning).
     const parentCorr = g.correspondences?.get(src)
     const childEdge = parentCorr ? correspondenceChild(parentCorr, name) : undefined
@@ -568,7 +568,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
     const srcKind = kindOf(srcNode.type)
     const access = localAccessorFor(src, g)
 
-    // Bridging (docs/codec-image.md §2/§3). `ref`-based navigation always
+    // Bridging (docs/reconciliation.md §4). `ref`-based navigation always
     // addresses a real image edge, so the only outcomes actually reachable
     // here are: "bridge" (either kind); a struct's own image-only/decode
     // ("drop") or image-only/encode ("default", from the image); a
@@ -597,7 +597,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
 
     if(resolution?.action === "trap" || resolution?.action === "unreachable")
     {
-        const reason = resolution.action === "trap" ? resolution.reason : "structurally unreachable (docs/codec-image.md §2.4)"
+        const reason = resolution.action === "trap" ? resolution.reason : "structurally unreachable (docs/reconciliation.md §4.5)"
         b.line(`throw new CodecTrap(-1, ${JSON.stringify(reason)});`)
         return
     }
@@ -606,7 +606,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
     {
         if(resolution?.action === "default")
         {
-            // Union image-only variant, local declares a default (§3.2):
+            // Union image-only variant, local declares a default (§4.5):
             // still call the callee to correctly consume its own wire
             // bytes (the bytecode already knows this variant's shape),
             // but materialize the local default instead of the real,
@@ -621,7 +621,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
         const temp = `__tmp${g.tempCounter.n++}`
         b.line(`const ${temp} = ${result};`)
 
-        // Struct image-only field (§3.2): consumed above for wire-cursor
+        // Struct image-only field (§4.4): consumed above for wire-cursor
         // correctness, never written back anywhere real.
         if(resolution?.action === "drop") return
 
@@ -648,7 +648,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
         let argExpr: string
         if(resolution?.action === "default")
         {
-            // Struct image-only field, encode (§3.3): the wire still
+            // Struct image-only field, encode (§4.4): the wire still
             // needs real bytes at this position — substitute the field's
             // own declared default, read from the image (the only place
             // a value for a field the local model doesn't have at all

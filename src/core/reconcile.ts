@@ -1,5 +1,5 @@
 /**
- * core — Reconciliation (docs/codec-image.md §2/§3)
+ * core — Reconciliation (docs/reconciliation.md §4)
  *
  * Target- *and* codec-independent: this computes a mapping some codegen
  * consumes, but knows nothing about wire bytes, RTL, or any target
@@ -17,12 +17,12 @@
  * codec-extension.ts` re-exports `Direction` from here for its own
  * existing consumers — it isn't redefined there.
  *
- * Two functions, deliberately kept separate (docs/codec-image.md §2.4
+ * Two functions, deliberately kept separate (docs/reconciliation.md §4.2
  * spells out why): `reconcile` is the direction-agnostic lock-step walk of
- * the image tree and the local tree (§2); `resolve` turns one edge of that
+ * the image tree and the local tree (§4.2); `resolve` turns one edge of that
  * walk's result into what a codegen should actually do, which — unlike the
- * tree shape itself — does depend on direction (§3's four relaxation
- * rules).
+ * tree shape itself — does depend on direction (§4.4/§4.5's
+ * tables).
  *
  * "Image tree" and "local tree" are both ordinary `TypeNode` graphs here —
  * the image side is whatever `buildTypeGraph` produces from a decoded
@@ -58,8 +58,8 @@ import type { UnionType } from "./metamodel"
  *  bytes into one. A whole-program property in `codecs` (passed in
  *  once, read by `computeChild`'s union branch and `i0`'s own initial
  *  stream capability — see `codec-extension.ts`'s own doc comment) and, at
- *  a smaller grain here, `resolve`'s own per-edge parameter (§3's four
- *  relaxation rules are direction-crossed by construction). */
+ *  a smaller grain here, `resolve`'s own per-edge parameter (§4.4/§4.5's
+ *  tables are direction-crossed by construction). */
 export type Direction = "encode" | "decode"
 
 export type ReconciliationOutcome = "matched" | "image-only" | "local-only"
@@ -80,15 +80,15 @@ export interface Correspondence
      *  is determined by this node's own kind, whichever side has it),
      *  keyed by name. The *union* of names present on either side: image
      *  declaration order first (matching the wire's own `ref` addressing,
-     *  §2.1), then any local-only names appended in local declaration
+     *  §4.1), then any local-only names appended in local declaration
      *  order. Every name that exists on at least one side gets an entry,
      *  regardless of whether a codegen for a *specific* direction will
-     *  actually need it — §2.4's table: a decode-side union switch only
+     *  actually need it — §4.5's table: a decode-side union switch only
      *  ever needs `"matched"`/`"image-only"` variants, an encode-side one
      *  only ever needs `"matched"`/`"local-only"` — filtering by outcome
      *  for the direction at hand is the caller's job, not `reconcile`'s. */
     readonly children?: readonly CorrespondenceEdge[]
-    /** A list's one, unnamed element edge (§2.1: a list needs no name to
+    /** A list's one, unnamed element edge (§4.1: a list needs no name to
      *  match by at all) — present iff this node's kind is List. Always
      *  `"matched"` once its own kind check has passed: a `ListType`
      *  always has exactly one element edge on both sides, so there is no
@@ -142,7 +142,7 @@ function outcomeOf(imageNode: TypeNode | undefined, localNode: TypeNode | undefi
 }
 
 /**
- * Reconcile `imageRoot` against `localRoot` (§2's lock-step walk).
+ * Reconcile `imageRoot` against `localRoot` (§4.2's lock-step walk).
  *
  * Memoized on the exact (imageNode, localNode) pair — mint the identity,
  * cache it, *then* recurse (mirroring `type-graph.ts`'s own `build()`
@@ -152,8 +152,8 @@ function outcomeOf(imageNode: TypeNode | undefined, localNode: TypeNode | undefi
  * object across unrelated positions too — see this file's header — since a
  * `Correspondence` carries nothing position-dependent.
  *
- * Throws on a §2.2 kind mismatch — the one case reconciliation rejects
- * outright rather than resolving via §3.
+ * Throws on a §4.3 kind mismatch — the one case reconciliation rejects
+ * outright rather than resolving via §4.4/§4.5.
  */
 export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Correspondence
 {
@@ -169,7 +169,7 @@ export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Corresponde
         {
             throw new Error(
                 `reconcile: kind mismatch — image is "${imageNode.type.kind}", local is "${localNode.type.kind}" ` +
-                `(docs/codec-image.md §2.2: kind-changing evolution is out of scope)`)
+                `(docs/reconciliation.md §4.3: kind-changing evolution is out of scope)`)
         }
 
         const outcome = outcomeOf(imageNode, localNode)
@@ -207,7 +207,7 @@ export type Resolution =
     | { readonly action: "drop" }
     | { readonly action: "default"; readonly value: unknown }
     | { readonly action: "trap"; readonly reason: string }
-    /** §2.4's table: a combination §3 never needed a rule for, because the
+    /** §4.5's table: a combination no rule is needed for, because the
      *  union's own selection mechanism (the local value's active variant
      *  on encode; the wire tag on decode) already rules it out
      *  structurally — not a gap, a codegen literally never needs to emit
@@ -215,8 +215,8 @@ export type Resolution =
     | { readonly action: "unreachable" }
 
 /**
- * Apply §3's relaxation rules to one edge of `parent`'s children, for one
- * direction. `reconcile`'s own tree is direction-agnostic (§2.4) — this is
+ * Apply §4.4/§4.5's rules to one edge of `parent`'s children, for one
+ * direction. `reconcile`'s own tree is direction-agnostic (§4.2) — this is
  * the separate, direction-aware interpretation step, called once per
  * direction a codegen is generating for, and once per edge it needs a
  * decision for (never recursively — see below).
@@ -229,7 +229,7 @@ export type Resolution =
  * (`drop`/`default`/`trap`/`unreachable`) already fully describes what to
  * do with *that entire edge*, including whatever is nested inside it —
  * dropping a struct field write is unconditionally safe regardless of
- * what the field's own type contains (§3.2), so a caller never needs to
+ * what the field's own type contains (§4.4), so a caller never needs to
  * recurse into a non-matched edge's own children at all. Every real call
  * site is therefore "resolve one child of an edge I already bridged into."
  */
@@ -247,8 +247,8 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
     {
         if(c.outcome === "image-only")
         {
-            // §3.2 — decode: an unrecognized tag arrived. On encode this
-            // variant can never be the value being encoded at all (§2.4).
+            // §4.5 — decode: an unrecognized tag arrived. On encode this
+            // variant can never be the value being encoded at all (§4.5).
             if(direction === "encode") return { action: "unreachable" }
             const localUnion = parent.localNode!.type as UnionType
             if(localUnion.defaultVariant === undefined)
@@ -261,9 +261,9 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
             return { action: "default", value: defaultValueOf(parent.localNode!.type) }
         }
 
-        // local-only. §3.4 — encode: the local value genuinely is this
+        // local-only. §4.5 — encode: the local value genuinely is this
         // variant; no wire representation exists for it. On decode this
-        // variant can never be selected by an incoming tag at all (§2.4).
+        // variant can never be selected by an incoming tag at all (§4.5).
         if(direction === "decode") return { action: "unreachable" }
         return {
             action: "trap",
@@ -275,15 +275,15 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
     // always "matched" and already returned above).
     if(c.outcome === "image-only")
     {
-        // §3.2 (decode): dropping a struct field's write is unconditionally
-        // safe. §3.3 (encode): substitute the field's own declared default,
+        // §4.4 (decode): dropping a struct field's write is unconditionally
+        // safe. §4.4 (encode): substitute the field's own declared default,
         // read from the image — the only place a value for a field the
         // local model doesn't have at all could come from.
         return direction === "decode" ? { action: "drop" } : { action: "default", value: defaultValueOf(c.imageNode!.type) }
     }
 
-    // local-only. §3.1 (decode): the decoder itself instantiates this
-    // field's container; seed it from the local declared default. §3.4
-    // (encode, additive): drop — unconditionally safe, the mirror of §3.2.
+    // local-only. §4.4 (decode): the decoder itself instantiates this
+    // field's container; seed it from the local declared default. §4.4
+    // (encode, additive): drop — unconditionally safe, the mirror of image-only/decode.
     return direction === "decode" ? { action: "default", value: defaultValueOf(c.localNode!.type) } : { action: "drop" }
 }
