@@ -20,7 +20,7 @@
  */
 
 import type { ExtInstrOf } from "mog-core"
-import type { CryptoParam } from "./crypto"
+import type { CryptoParam } from "./crypto/crypto"
 
 export type CodecExtInstr =
     | { ext: "ENTER"; dst: number; src: number; ref: number }

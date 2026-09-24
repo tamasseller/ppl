@@ -33,8 +33,8 @@ import {
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
     initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
 } from "./codec-ext-instr"
-import type { CryptoContext, CryptoParam } from "./crypto"
-import { createCryptoContext, integerParamBytes } from "./crypto"
+import type { CryptoContext, CryptoParam } from "./crypto/crypto"
+import { createCryptoContext, integerParamBytes } from "./crypto/crypto"
 
 export type { Direction }
 

@@ -66,7 +66,7 @@ import { encodeLeb128, decodeLeb128 } from "mog-core"
 import { DIRECT_OPCODES, CRYPTO_OPCODES, assertNever } from "./opcodes"
 import type { DirectOpcode, CryptoOpcode } from "./opcodes"
 import type { CodecExtInstr } from "./codec-ext-instr"
-import type { CryptoParam } from "./crypto"
+import type { CryptoParam } from "./crypto/crypto"
 import {
     enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr,
     readInstr, writeInstr, hasNextInstr, cloneRdInstr, cloneWrInstr, seekInstr,

@@ -28,6 +28,7 @@
     "clean": "rm -rf dist node_modules"
   },
   "dependencies": {
+    "@noble/hashes": "^1.8.0",
     "mog-core": "git+https://github.com/tamasseller/mog-core.git"
   },
   "devDependencies": {

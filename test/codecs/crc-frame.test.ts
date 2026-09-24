@@ -19,8 +19,9 @@ import { validateCodecHandles } from "../../src/codecs/engine/validate-handles"
 import { binaryEncodeRules, binaryDecodeRules } from "../../src/codecs/components/binary-rules"
 import type { FrameSpec } from "../../src/codecs/components/framed"
 import { framedEncode, framedDecode } from "../../src/codecs/components/framed"
-import { CRC_CATALOGUE } from "../../src/codecs/engine/crc-catalogue"
-import { createCryptoContext, crcValue, integerParamBytes } from "../../src/codecs/engine/crypto"
+import { CRC_CATALOGUE } from "../../src/codecs/engine/crypto/crc-catalogue"
+import { createCryptoContext, integerParamBytes } from "../../src/codecs/engine/crypto/crypto"
+import { crcValue } from "../../src/codecs/engine/crypto/crc"
 
 const Packet = named("Packet", struct({
     id: u8,
@@ -269,8 +270,8 @@ describe("crypto_init in ir text", () =>
 
     test("an unknown algorithm lowers, and fails when its INIT runs", () =>
     {
-        const program = lower(ir`crypto_init(0, "SHAKE256"); return;`)
+        const program = lower(ir`crypto_init(0, "SM3"); return;`)
         const ext = createCodecExtension("encode", { container: { root: 0 }, key: "root", type: buildTypeGraph(u8).root }, [])
-        assert.throws(() => run(program, ext), /unknown algorithm "SHAKE256"/)
+        assert.throws(() => run(program, ext), /unknown algorithm "SM3"/)
     })
 })

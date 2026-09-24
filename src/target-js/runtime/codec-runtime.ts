@@ -21,7 +21,7 @@
  * either).
  */
 
-import type {CryptoContext} from "../../codecs/engine/crypto"
+import type {CryptoContext} from "../../codecs/engine/crypto/crypto"
 import {PAST_END_TRAP} from "../../codecs/engine/codec-extension"
 
 /** TAG: which variant is currently active, as its declaration-order

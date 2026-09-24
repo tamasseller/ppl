@@ -91,7 +91,7 @@ describe("crc frame — generated code", () =>
 
     test("an algorithm the runtime does not implement fails at generation", () =>
     {
-        assert.throws(() => generateCodecModule({ name: "Packet", rootType: Packet, ...programs({ alg: "SHAKE256", code: TRAP_CRC }) }),
-            /unknown algorithm "SHAKE256"/)
+        assert.throws(() => generateCodecModule({ name: "Packet", rootType: Packet, ...programs({ alg: "SM3", code: TRAP_CRC }) }),
+            /unknown algorithm "SM3"/)
     })
 })

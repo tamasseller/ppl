@@ -1,42 +1,17 @@
 /**
- * codecs — Crypto contexts behind `INIT`/`ABSORB`/`FINAL`/`VERIFY`
- * (the workspace's docs/crypto.md, "Crypto primitives")
- *
- * One implementation, shared by the interpreter (`codec-extension.ts`) and
- * generated code (`target-js`'s runtime). Stage 1: CRCs only, by RevEng
- * catalogue name or as `"CRC"` with the Rocksoft parameters.
+ * codecs — CRCs behind the crypto ops (the workspace's docs/crypto.md §4.1):
+ * a RevEng catalogue name, or `"CRC"` with the six Rocksoft parameters and
+ * an optional `byteorder`
  */
 
 import { CRC_CATALOGUE } from "./crc-catalogue"
 import type { CrcCatalogueEntry } from "./crc-catalogue"
+import type { CryptoContext, CryptoParam, CryptoSpec } from "./crypto"
 
-/** One `INIT` parameter as the wire carries it: its value's meaning is
- *  fixed by its name, so the bytes stay uninterpreted until a context
- *  reads them. An integer is unsigned little-endian. */
-export interface CryptoParam
+/** `bigEndian` is the CRC's wire byte order. */
+interface CrcSpec extends CryptoSpec
 {
-    readonly name: string
-    readonly value: readonly number[]
-}
-
-export interface CryptoContext
-{
-    /** Bytes `from` (inclusive) to `to` (exclusive) of `bytes`. */
-    absorb(bytes: ArrayLike<number>, from: number, to: number): void
-    /** The result's wire length, fixed by configuration. */
-    readonly outLen: number
-    /** The result's wire bytes; the context is spent afterwards. */
-    final(): number[]
-}
-
-/** An integer parameter's little-endian bytes, as short as the value allows. */
-export function integerParamBytes(value: number | bigint): number[]
-{
-    let v = BigInt(value)
-    if(v < 0n) throw new Error(`crypto: integer parameter ${value} is negative`)
-    const bytes: number[] = []
-    for(; v > 0n; v >>= 8n) bytes.push(Number(v & 0xffn))
-    return bytes
+    readonly bigEndian: boolean
 }
 
 const integerOf = (value: readonly number[]): bigint =>
@@ -129,15 +104,6 @@ function reflect32(v: number, bits: number): number
     return r >>> 0
 }
 
-/** A configuration resolved once: its table, and a factory for contexts. */
-export interface CryptoSpec
-{
-    /** The result's wire length. */
-    readonly outLen: number
-    readonly bigEndian: boolean
-    create(): CryptoContext
-}
-
 /** A 32-bit result's wire bytes. */
 function bytes32(v: number, outLen: number, bigEndian: boolean): number[]
 {
@@ -170,7 +136,7 @@ function context(outLen: number, bigEndian: boolean, step: (b: number) => void, 
 
 /** Table-driven Rocksoft model in 32-bit arithmetic. A register narrower
  *  than a byte runs left-aligned in 8 bits, unreflected. */
-function crcSpec32(m: CrcModel): CryptoSpec
+function crcSpec32(m: CrcModel): CrcSpec
 {
     const table = new Uint32Array(256)
     const outLen = Math.ceil(m.width / 8)
@@ -252,7 +218,7 @@ function crcSpec32(m: CrcModel): CryptoSpec
 }
 
 /** The same model over BigInt, for the widths 32 bits cannot hold. */
-function crcSpecWide(m: CrcModel): CryptoSpec
+function crcSpecWide(m: CrcModel): CrcSpec
 {
     const table: bigint[] = new Array(256)
     const outLen = Math.ceil(m.width / 8)
@@ -302,33 +268,18 @@ function crcSpecWide(m: CrcModel): CryptoSpec
     }
 }
 
-const SPECS = new Map<string, CryptoSpec>()
-
-/** `alg` under `params`, validated and resolved once per configuration;
- *  throws on anything not implemented, which is how codegen checks one. */
-export function cryptoSpec(alg: string, params: readonly CryptoParam[]): CryptoSpec
+/** `alg`'s spec under `params`: a catalogue name, or `"CRC"`. */
+export function crcSpec(alg: string, params: readonly CryptoParam[]): CrcSpec
 {
-    const key = `${alg}\0${params.map(p => `${p.name}=${p.value.join(",")}`).join(";")}`
-    let spec = SPECS.get(key)
-    if(!spec)
-    {
-        const m = crcModel(alg, params)
-        spec = m.width <= 32 ? crcSpec32(m) : crcSpecWide(m)
-        SPECS.set(key, spec)
-    }
-    return spec
-}
-
-export function createCryptoContext(alg: string, params: readonly CryptoParam[]): CryptoContext
-{
-    return cryptoSpec(alg, params).create()
+    const m = crcModel(alg, params)
+    return m.width <= 32 ? crcSpec32(m) : crcSpecWide(m)
 }
 
 /** The integer CRC of `bytes` under `alg`, `xorout` applied — what a
  *  catalogue entry's `check` names. */
 export function crcValue(alg: string, params: readonly CryptoParam[], bytes: ArrayLike<number>): bigint
 {
-    const spec = cryptoSpec(alg, params)
+    const spec = crcSpec(alg, params)
     const ctx = spec.create()
     ctx.absorb(bytes, 0, bytes.length)
     const out = ctx.final()
