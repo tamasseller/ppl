@@ -198,7 +198,7 @@ function translateStmt(s: Stmt<CodecExtInstr>, entryNode: TypeNode | undefined, 
             // A GENERIC-ABI procedure (no entryNode — a plain-CALL helper
             // like delta-leb128.ts's leb128_encode/decode) has no separate
             // handle/Accessor exit value: s.value *is* the real result.
-            if(entryNode === undefined) { b.line(`return ${translateExpr(s.value, g)};`); return }
+            if(entryNode === undefined) { b.line(`return ${s.value ? translateExpr(s.value, g) : "0"};`); return }
 
             // s.value's own evaluation can carry a real, still-pending
             // side effect (raise.ts's own killAcc/readAcc distinction —
@@ -208,7 +208,7 @@ function translateStmt(s: Stmt<CodecExtInstr>, entryNode: TypeNode | undefined, 
             // own value) — so it still has to run, even though what it
             // evaluates to is never itself this procedure's real result
             // (that's entryNode's own accessor, via emitReturn).
-            if(!(s.value.kind === ExprKind.Ext && emitExtStmtIfApplicable(s.value, g, b)))
+            if(s.value && !(s.value.kind === ExprKind.Ext && emitExtStmtIfApplicable(s.value, g, b)))
                 b.line(`${translateExpr(s.value, g)};`)
             emitReturn(g, b)
             return
@@ -301,7 +301,8 @@ export function generateProcedure(
 ): string
 {
     const slotTypes = new Map<number, TypeNode>(entryNode ? [[0, entryNode]] : [])
-    const {maxSlot, listTraversalSlots, clones} = prescan(raised.body)
+    const {maxSlot, listTraversalSlots, clones, cryptos} = prescan(raised.body)
+    const cryptoDecl = cryptos > 0 ? `let ${Array.from({length: cryptos}, (_, i) => `c${i}!: CryptoContext`).join(", ")};` : undefined
     const correspondences = entryCorrespondence ? new Map([[0, entryCorrespondence]]) : undefined
     const g: GenCtx = {direction, slotTypes, projection, writeBacks: new Map(), idxDeclared: new Set(), tempCounter: {n: 0}, correspondences}
 
@@ -321,6 +322,7 @@ export function generateProcedure(
         {
             if(raised.peakSlots > raised.argCount)
                 b.line(`let ${Array.from({length: raised.peakSlots - raised.argCount}, (_, i) => `s${i + raised.argCount}`).join(", ")};`)
+            if(cryptoDecl) b.line(cryptoDecl)
             withForkFrame(clones, b, () => translateStmts(raised.body, undefined, g, b))
         })
         return b.toString()
@@ -352,6 +354,7 @@ export function generateProcedure(
         {
             if(raised.peakSlots > 0) b.line(`let ${Array.from({length: raised.peakSlots}, (_, i) => `s${i}`).join(", ")};`)
             if(maxSlot > 0) b.line(`let ${Array.from({length: maxSlot}, (_, i) => `v${i + 1}`).join(", ")};`)
+            if(cryptoDecl) b.line(cryptoDecl)
             b.line(
                 entryAccess.kind === "struct" ? `let v0: any = ${entryAccess.beginStruct?.() ?? "{}"};` :
                 entryAccess.kind === "list" ? `let v0: any = ${entryAccess.beginList?.() ?? "[]"};` :
@@ -372,6 +375,7 @@ export function generateProcedure(
         {
             if(raised.peakSlots > 0) b.line(`let ${Array.from({length: raised.peakSlots}, (_, i) => `s${i}`).join(", ")};`)
             if(maxSlot > 0) b.line(`let ${Array.from({length: maxSlot}, (_, i) => `v${i + 1}`).join(", ")};`)
+            if(cryptoDecl) b.line(cryptoDecl)
             for(const slot of listTraversalSlots) idxCounter(slot, g, b)
             withForkFrame(clones, b, () => translateStmts(raised.body, entryNode, g, b))
         })

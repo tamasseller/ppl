@@ -13,7 +13,8 @@ import assert from "node:assert/strict"
 import type { TypeNode } from "../../src/core/index"
 import { struct, union, unit, u8, u32, list, buildTypeGraph } from "../../src/core/index"
 import type { RtlProgram, RtlProc } from "mog-core"
-import { bare, validateProgram } from "mog-core"
+import { bare, validateProgram, ir, proc as irProc, lowerProgram } from "mog-core"
+import { codecRules } from "../../src/codecs/engine/codec-extension"
 import { callCodecInstr, enterInstr, enterNextInstr, loadValInstr, tagInstr } from "../../src/codecs/engine/codec-ext-instr"
 import type { CodecExtInstr } from "../../src/codecs/engine/codec-ext-instr"
 
@@ -177,5 +178,49 @@ describe("validateCodecHandles — hand-built fixtures", () =>
             procedures: [proc(0, [loadValInstr(0), bare("RETURN")])], // no header
         }
         assert.throws(() => validateCodecHandles(program), /never entered/)
+    })
+})
+
+describe("validateCodecHandles — crypto handles", () =>
+{
+    const lower = (entry: ReturnType<typeof irProc>): RtlProgram<CodecExtInstr> => lowerProgram(entry, { rules: codecRules })
+
+    test("accepts INIT, ABSORB from a reader fork, then FINAL", () =>
+    {
+        const program = lower(irProc([], ir`clone_rd(0, 1); crypto_init(0, "CRC-8/SMBUS"); absorb(0, 1, 0); final(0, 0); return;`))
+        assert.doesNotThrow(() => validateCodecHandles(program))
+    })
+
+    test("rejects ABSORB on a handle never initialized", () =>
+    {
+        const program = lower(irProc([], ir`clone_rd(0, 1); absorb(0, 1, 0); return;`))
+        assert.throws(() => validateCodecHandles(program), /crypto handle 0 has no live context/)
+    })
+
+    test("rejects ABSORB from a writer fork, or from i0 itself", () =>
+    {
+        const writer = lower(irProc([], ir`crypto_init(0, "CRC-8/SMBUS"); clone_wr(0, 1); absorb(0, 1, 0); return;`))
+        assert.throws(() => validateCodecHandles(writer), /iterator 1 must be a CLONE_RD fork/)
+        const root = lower(irProc([], ir`crypto_init(0, "CRC-8/SMBUS"); absorb(0, 0, 0); return;`))
+        assert.throws(() => validateCodecHandles(root), /iterator 0 must be a CLONE_RD fork/)
+    })
+
+    test("rejects a context used after FINAL spent it", () =>
+    {
+        const program = lower(irProc([], ir`crypto_init(0, "CRC-8/SMBUS"); final(0, 0); final(0, 0); return;`))
+        assert.throws(() => validateCodecHandles(program), /no live context/)
+    })
+
+    test("rejects a handle initialized by the caller and used by the callee", () =>
+    {
+        const callee = irProc([], ir`clone_rd(0, 1); absorb(0, 1, 0); return;`)
+        const program = lower(irProc([], ir`crypto_init(0, "CRC-8/SMBUS"); ${callee}(); return;`))
+        assert.throws(() => validateCodecHandles(program), /procedure 1, .*crypto handle 0 has no live context/)
+    })
+
+    test("rejects a context initialized only inside a branch", () =>
+    {
+        const program = lower(irProc(["x"], ir`if (x) { crypto_init(0, "CRC-8/SMBUS"); } clone_rd(0, 1); absorb(0, 1, 0); return;`))
+        assert.throws(() => validateCodecHandles(program), /no live context/)
     })
 })

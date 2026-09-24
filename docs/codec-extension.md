@@ -447,7 +447,8 @@ do.
 | `LOAD_VAL` / `STORE_VAL` / `COUNT` / `TAG` / `OPEN_LIST` / `HAS_NEXT` | `N + 1` = 5 (each) | 1 code per `idx < N` | `idx` LEB128 |
 | `READ` / `WRITE` | `N·`\|`WIDTHS`\|` + `\|`WIDTHS`\| = 15 (each) | 1 code per `(iter, width)`, `iter < N` | 1 code per `width` + `iter` LEB128; `width` is never LEB128'd |
 | `CLONE_RD` / `CLONE_WR` | `N + 1` = 5 (each) | 1 code per `src < N`, `dst = src+1` implied | `src, dst` both LEB128 |
-| `SEEK` | `N + 1` = 5 | 1 code per `iter < N` + `delta` zigzag-LEB128 | `iter` LEB128 + `delta` zigzag-LEB128 |
+| `SEEK` | 1 | none | `iter` LEB128 + `delta` zigzag-LEB128 |
+| `ESCAPE`, then 3 spare | 4 | none | LEB128 sub-code, then that op's operands (the workspace's docs/crypto.md §2.1) |
 | `CALL_CODEC` | `N² + 1` = 17 | 1 code per `(src, ref)` pair + `codec_idx` LEB128 | `codec_idx, src, ref` all LEB128 |
 | `CALL_CODEC_NEXT` | `N + 1` = 5 | 1 code per `src < N` + `codec_idx` LEB128 | `codec_idx, src` both LEB128 |
 | `WRITE_SEQ` (§3.5) | \|`WIDTHS`\| = 3 | none | 1 code per `w`; `iter, handle` both LEB128 |
@@ -455,7 +456,8 @@ do.
 
 The original 15 opcodes total 119 codes (bytes 128-246), and
 `WRITE_SEQ`/`READ_SEQ` spend the remaining 9 (3 + 6), filling bytes
-128-255 with nothing reserved. Neither gets a compact `iter`/`handle` form:
+128-255. `SEEK` gave up its compact forms for `ESCAPE` (byte 221) and three
+spare codes (222-224), so no other band moved. Neither gets a compact `iter`/`handle` form:
 this op already replaces a whole per-element loop, so its per-*list* cost
 of a few LEB128 bytes amortizes across every element it transfers, unlike
 `READ`/`WRITE`'s per-*element* cost, and there was no codespace left for

@@ -13,7 +13,7 @@ import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
 import { encodeInstr, decodeInstr, encodeBody, decodeBody, ir, lowerProgram, proc } from "mog-core"
-import { callCodecInstr, callCodecNextInstr, cloneRdInstr, cloneWrInstr, countInstr, enterInstr, enterNextInstr, hasNextInstr, loadValInstr, openListInstr, readInstr, readSeqInstr, seekInstr, storeValInstr, tagInstr, writeInstr, writeSeqInstr } from "../../src/codecs/engine/codec-ext-instr"
+import { callCodecInstr, callCodecNextInstr, cloneRdInstr, cloneWrInstr, countInstr, enterInstr, enterNextInstr, hasNextInstr, loadValInstr, openListInstr, readInstr, readSeqInstr, seekInstr, storeValInstr, tagInstr, writeInstr, writeSeqInstr, initInstr, absorbInstr, finalInstr, verifyInstr } from "../../src/codecs/engine/codec-ext-instr"
 import type { CodecExtInstr } from "../../src/codecs/engine/codec-ext-instr"
 import type { ExtInstrOf, Extension } from "mog-core"
 import { struct, union, unit, u8, list } from "../../src/core/index"
@@ -85,10 +85,16 @@ const rows: Row[] = [
     { byte: 215, instr: cloneWrInstr(0, 1) },
     { byte: 219, instr: cloneWrInstr(0, 5) },
 
-    // SEEK iter, delta — base 220
+    // SEEK iter, delta — one code, 220; iter and delta always LEB128'd
     { byte: 220, instr: seekInstr(0, 5) },
-    { byte: 223, instr: seekInstr(3, -1) },
-    { byte: 224, instr: seekInstr(4, 0) },
+    { byte: 220, instr: seekInstr(3, -1) },
+    { byte: 220, instr: seekInstr(4, 0) },
+
+    // ESCAPE sub-code — 221, then 222..224 spare
+    { byte: 221, instr: initInstr(0, "CRC-32/ISO-HDLC", []) },
+    { byte: 221, instr: absorbInstr(0, 1, 0) },
+    { byte: 221, instr: finalInstr(0, 0) },
+    { byte: 221, instr: verifyInstr(0, 0, 7) },
 
     // CALL_CODEC codec_idx, src, ref — base 225, compact = src*4+ref
     { byte: 225, instr: callCodecInstr(7, 0, 0) },
@@ -145,10 +151,77 @@ describe("wire.ts — representative byte table", () =>
 
 describe("wire.ts — opcode-space budget", () =>
 {
-    test("all 128 codes assigned (bytes 128..255) — WRITE_SEQ/READ_SEQ (item 11) fill the budget exactly", () =>
+    test("every code but the three spare after ESCAPE decodes", () =>
     {
         for (let b = 128; b <= 255; b++)
-            assert.doesNotThrow(() => decodeInstr(Uint8Array.of(b, 0, 0, 0, 0, 0), 0, ext), `byte ${b} should decode`)
+        {
+            if (b >= 222 && b <= 224)
+                assert.throws(() => decodeInstr(Uint8Array.of(b, 0, 0, 0, 0, 0), 0, ext), /reserved and unassigned/, `byte ${b} is spare`)
+            else
+                assert.doesNotThrow(() => decodeInstr(Uint8Array.of(b, 0, 0, 0, 0, 0), 0, ext), `byte ${b} should decode`)
+        }
+    })
+})
+
+describe("wire.ts — escaped ops", () =>
+{
+    test("INIT carries its name length-prefixed and its parameters as a NUL-terminated TLV list", () =>
+    {
+        const instr = initInstr(2, "CRC", [{ name: "width", value: [16] }, { name: "iv", value: [] }])
+        assert.deepEqual(encodeInstr(instr, ext), [
+            221, 0, 2,
+            3, 0x43, 0x52, 0x43,
+            0x77, 0x69, 0x64, 0x74, 0x68, 0, 1, 16,
+            0x69, 0x76, 0, 0,
+            0,
+        ])
+    })
+
+    test("the other three are sub-code, handle, then their iterators and code", () =>
+    {
+        assert.deepEqual(encodeInstr(absorbInstr(1, 2, 0), ext), [221, 1, 1, 2, 0])
+        assert.deepEqual(encodeInstr(finalInstr(1, 0), ext), [221, 2, 1, 0])
+        assert.deepEqual(encodeInstr(verifyInstr(1, 0, 300), ext), [221, 3, 1, 0, 0xac, 0x02])
+    })
+
+    test("every escaped op round-trips, a multi-byte UTF-8 name and wide parameter included", () =>
+    {
+        for (const instr of [
+            initInstr(0, "CRC-82/DARC", [{ name: "byteorder", value: [1] }]),
+            initInstr(300, "ünïcode", [{ name: "poly", value: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] }]),
+            absorbInstr(5, 200, 0), finalInstr(0, 3), verifyInstr(9, 1, 0xffff),
+        ])
+        {
+            const encoded = encodeInstr(instr, ext)
+            const { instr: decoded, next } = decodeInstr(Uint8Array.from(encoded), 0, ext)
+            assert.deepEqual(decoded, instr)
+            assert.equal(next, encoded.length)
+        }
+    })
+
+    test("an unassigned sub-code is rejected, since its length is unknown", () =>
+    {
+        assert.throws(() => decodeInstr(Uint8Array.of(221, 4, 0, 0), 0, ext), /sub-code 4 is unassigned/)
+    })
+
+    test("a repeated parameter name is rejected both ways", () =>
+    {
+        const twice = [{ name: "a", value: [1] }, { name: "a", value: [2] }]
+        assert.throws(() => encodeInstr(initInstr(0, "CRC", twice), ext), /given twice/)
+        assert.throws(() => decodeInstr(Uint8Array.of(221, 0, 0, 0, 0x61, 0, 1, 1, 0x61, 0, 1, 2, 0), 0, ext), /given twice/)
+    })
+
+    test("a parameter name that is empty or contains NUL cannot be encoded", () =>
+    {
+        assert.throws(() => encodeInstr(initInstr(0, "CRC", [{ name: "", value: [] }]), ext), /empty or contains NUL/)
+        assert.throws(() => encodeInstr(initInstr(0, "CRC", [{ name: "a\0b", value: [] }]), ext), /empty or contains NUL/)
+    })
+
+    test("a truncated INIT is rejected", () =>
+    {
+        const encoded = encodeInstr(initInstr(0, "CRC-32/ISO-HDLC", []), ext)
+        assert.throws(() => decodeInstr(Uint8Array.from(encoded.slice(0, 6)), 0, ext))
+        assert.throws(() => decodeInstr(Uint8Array.from(encoded.slice(0, -1)), 0, ext), /unterminated/)
     })
 })
 

@@ -21,6 +21,9 @@
  * either).
  */
 
+import type {CryptoContext, CryptoParam} from "../../codecs/engine/crypto"
+import {createCryptoContext} from "../../codecs/engine/crypto"
+
 /** TAG: which variant is currently active, as its declaration-order
  *  index — codegen bakes in the variant name list itself (from the
  *  union's own `TypeNode.edges`, in order) and resolves the active
@@ -420,5 +423,72 @@ export class CodecTrap extends Error
     {
         super(reason ? `codec trap ${code}: ${reason}` : `codec trap ${code}`)
         this.name = "CodecTrap"
+    }
+}
+
+// ── Crypto contexts (the workspace's docs/crypto.md) ─────────────────────
+
+export function cryptoInit(alg: string, params: readonly CryptoParam[]): CryptoContext
+{
+    return createCryptoContext(alg, params)
+}
+
+/** Advance reader `srcIdx` to `endIdx`'s position, absorbing what it passes. */
+export function cryptoAbsorb(ctx: Ctx, c: CryptoContext, srcIdx: number, endIdx: number): void
+{
+    const it = iterAt(ctx, srcIdx)
+    if(it.capability !== "read")
+    {
+        throw new Error(`codec: ABSORB from write-only iterator ${srcIdx}`)
+    }
+
+    const until = iterAt(ctx, endIdx).pos
+    if(it.pos > until)
+    {
+        throw new Error(`codec: ABSORB: iterator ${srcIdx} is already past iterator ${endIdx}`)
+    }
+
+    c.absorb(ctx.buffer, it.pos, until)
+    it.pos = until
+}
+
+export function cryptoFinal(ctx: Ctx, c: CryptoContext, iterIdx: number): void
+{
+    const it = iterAt(ctx, iterIdx)
+    if(it.capability !== "write")
+    {
+        throw new Error(`codec: FINAL on read-only iterator ${iterIdx}`)
+    }
+
+    const bytes = c.final()
+    if(it.overwriteOnly && it.pos + bytes.length > ctx.length)
+    {
+        throw new Error(`codec: iterator ${iterIdx} (a CLONE_WR fork) can't append — only the root iterator appends`)
+    }
+
+    ensureCapacity(ctx, it.pos + bytes.length)
+    ctx.buffer.set(bytes, it.pos)
+    it.pos += bytes.length
+    ctx.length = Math.max(ctx.length, it.pos)
+}
+
+export function cryptoVerify(ctx: Ctx, c: CryptoContext, iterIdx: number, code: number): void
+{
+    const it = iterAt(ctx, iterIdx)
+    if(it.capability !== "read")
+    {
+        throw new Error(`codec: VERIFY on write-only iterator ${iterIdx}`)
+    }
+
+    let match = true
+    for(const b of c.final())
+    {
+        match = it.pos < ctx.length && ctx.buffer[it.pos] === b && match
+        it.pos++
+    }
+
+    if(!match)
+    {
+        throw new CodecTrap(code)
     }
 }
