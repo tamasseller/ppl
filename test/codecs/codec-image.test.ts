@@ -12,7 +12,7 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
-import { buildTypeGraph, i16, list, struct, u8, union, unit } from "../../src/core/index"
+import { buildTypeGraph, i16, list, struct, u8, u16, union, unit, named, matchType } from "../../src/core/index"
 import { validateProgram, run } from "mog-core"
 
 import { buildCodec } from "../../src/codecs/engine/resolver"
@@ -20,6 +20,7 @@ import { createCodecExtension } from "../../src/codecs/engine/codec-extension"
 import { binaryDecodeRules, binaryEncodeRules } from "../../src/codecs/components/binary-rules"
 import { decodeCodecImage, encodeCodecImage } from "../../src/codecs/engine/codec-image"
 import type { CodecImage } from "../../src/codecs/engine/codec-image"
+import { framedEncode, framedDecode } from "../../src/codecs/components/framed"
 
 describe("codec image — container round trip", () =>
 {
@@ -76,5 +77,47 @@ describe("codec image — container round trip", () =>
 
         assert.deepEqual(stripHeaders(decoded.encoderProgram.procedures), stripHeaders(image.encoderProgram.procedures))
         assert.deepEqual(stripHeaders(decoded.decoderProgram.procedures), stripHeaders(image.decoderProgram.procedures))
+    })
+})
+
+describe("codec image — a CRC frame", () =>
+{
+    test("its crypto ops survive the image round trip, and the decoded programs frame, verify and trap", () =>
+    {
+        const Packet = named("Packet", struct({ id: u8, samples: list(u16) }))
+        const spec = { alg: "CRC", params: { width: 16, poly: 0x1021, init: 0xffff, refin: 0, refout: 0, xorout: 0, byteorder: 0 }, code: 0x51 }
+        const innerOf = (rules: typeof binaryEncodeRules) => rules.find(r => matchType(Packet, r.pattern) !== undefined)!
+        const image: CodecImage = {
+            typeTree: Packet,
+            encoderProgram: buildCodec(Packet, [framedEncode(spec, innerOf(binaryEncodeRules), "Packet"), ...binaryEncodeRules], undefined),
+            decoderProgram: buildCodec(Packet, [framedDecode(spec, innerOf(binaryDecodeRules), "Packet"), ...binaryDecodeRules], undefined),
+        }
+
+        const decoded = decodeCodecImage(encodeCodecImage(image))
+        const bodies = (p: CodecImage["encoderProgram"]) => p.procedures.map(q => q.body)
+        assert.deepEqual(bodies(decoded.encoderProgram), bodies(image.encoderProgram))
+        assert.deepEqual(bodies(decoded.decoderProgram), bodies(image.decoderProgram))
+
+        const graph = buildTypeGraph(decoded.typeTree)
+        const value = { id: 7, samples: [1, 2, 3] }
+        const wire: number[] = []
+        const encodeExt = createCodecExtension("encode", { container: { root: value }, key: "root", type: graph.root }, wire)
+        validateProgram(decoded.encoderProgram, encodeExt)
+        assert.equal(run(decoded.encoderProgram, encodeExt).ok, true)
+
+        const decodeWith = (bytes: number[]) =>
+        {
+            const wrapper: Record<string, unknown> = { root: {} }
+            const ext = createCodecExtension("decode", { container: wrapper, key: "root", type: graph.root }, bytes)
+            validateProgram(decoded.decoderProgram, ext)
+            return { result: run(decoded.decoderProgram, ext), value: wrapper.root }
+        }
+        const good = decodeWith([...wire])
+        assert.equal(good.result.ok, true)
+        assert.deepEqual(good.value, value)
+
+        const bad = [...wire]
+        bad[3]! ^= 1
+        assert.equal(decodeWith(bad).result.trapCode, 0x51)
     })
 })
