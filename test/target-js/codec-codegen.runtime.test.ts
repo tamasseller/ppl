@@ -156,13 +156,13 @@ describe("codec-codegen — compiled encode/decode agree with the interpreted pa
     test("list of structs — ENTER_NEXT/CALL_CODEC_NEXT", () =>
     {
         const Item = named("Item", struct({ v: u8 }))
-        const T = named("Batch", struct({ items: list(Item, 8) }))
+        const T = named("Batch", struct({ items: list(Item, {capacity: 8}) }))
         assertMatchesInterpreted(T, "Batch", { items: [{ v: 1 }, { v: 2 }, { v: 3 }] })
     })
 
     test("list of integers — WRITE_SEQ/READ_SEQ bulk transfer", () =>
     {
-        const T = named("Samples", list(integer(-32768, 32767), 8))
+        const T = named("Samples", list(integer(-32768, 32767), {capacity: 8}))
         assertMatchesInterpreted(T, "Samples", [-1, 0, 1, 32767, -32768])
     })
 

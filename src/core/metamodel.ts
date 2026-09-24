@@ -29,10 +29,10 @@ export interface IntegerType
     /** Value a decoder/encoder substitutes when this field/variant has no
      *  source value of its own on one side of a reconciled pair of trees
      *  (docs/reconciliation.md §4.4). Always concrete — every integer
-     *  has a default, `0` unless the constructor was given a third
-     *  argument. A field needing a non-zero default doesn't reuse a
-     *  shared constant like `u8`; it constructs its own `integer(min,
-     *  max, d)` value, which is already a distinct `TypeNode`
+     *  has a default, `0` unless the constructor was given one. A field
+     *  needing a non-zero default doesn't reuse a shared constant like
+     *  `u8`; it constructs its own `integer(min, max, {default: d})`
+     *  value, which is already a distinct `TypeNode`
      *  (type-graph.ts's sharing is keyed by object identity, not
      *  structure) — no separate per-slot default record is needed. */
     default: number
@@ -86,8 +86,13 @@ export const isStruct = (t: SemanticType): t is StructType => kindOf(t) === Sema
 export const isUnion = (t: SemanticType): t is UnionType => kindOf(t) === SemanticTypeKinds.Union
 export const isReference = (t: SemanticType): t is UnionType => kindOf(t) === "reference"
 
-export const integer = (min: number, max: number, defaultValue: number = 0): IntegerType =>
-    ({kind: SemanticTypeKinds.Integer, min, max, default: defaultValue})
+export interface IntegerOptions
+{
+    readonly default?: number
+}
+
+export const integer = (min: number, max: number, opts: IntegerOptions = {}): IntegerType =>
+    ({kind: SemanticTypeKinds.Integer, min, max, default: opts.default ?? 0})
 
 // `2 ** n`, not `1 << n`: JS's `<<` operates on signed 32-bit ints (shift
 // amount mod 32, result sign-interpreted), which silently breaks exactly
@@ -106,7 +111,13 @@ export const u8 = unsignedInteger(8)
 export const u16 = unsignedInteger(16)
 export const u32 = unsignedInteger(32)
 
-export const list = (T: SemanticType, capacity?: number): ListType => ({kind: SemanticTypeKinds.List, elementType: T, capacity})
+export interface ListOptions
+{
+    readonly capacity?: number
+}
+
+export const list = (T: SemanticType, opts: ListOptions = {}): ListType =>
+    ({kind: SemanticTypeKinds.List, elementType: T, capacity: opts.capacity})
 
 export const struct = (def: {[k: string]: SemanticType}): StructType =>
 ({

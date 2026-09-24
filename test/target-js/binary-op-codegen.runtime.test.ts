@@ -98,7 +98,7 @@ test("revBits matches evalUnary's REVBITS directly", () =>
 
 test("compiled codec output never references evalBinary/evalUnary (the test oracle)", () =>
 {
-    const T = named("Samples", list(integer(0, 255), 4))
+    const T = named("Samples", list(integer(0, 255), {capacity: 4}))
     const encodeProgram = buildCodec(T, binaryEncodeRules, undefined)
     const decodeProgram = buildCodec(T, binaryDecodeRules, undefined)
     const source = generateCodecModule({name: "Samples", rootType: T, encodeProgram, decodeProgram, rules: tsTypeRules})

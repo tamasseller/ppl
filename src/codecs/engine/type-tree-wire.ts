@@ -326,7 +326,7 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
             case PUSH_INT_MIN0_D0_EXT:
             {
                 const maxR = decodeLeb128(bytes, pos); pos = maxR.next
-                push(integer(0, maxR.value, 0))
+                push(integer(0, maxR.value, {default: 0}))
                 break
             }
             case PUSH_INT_MIN0_EXT:
@@ -334,7 +334,7 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                 const maxR = decodeLeb128(bytes, pos)
                 const defR = decodeSigned(bytes, maxR.next)
                 pos = defR.next
-                push(integer(0, maxR.value, defR.value))
+                push(integer(0, maxR.value, {default: defR.value}))
                 break
             }
             case PUSH_INT_D0_EXT:
@@ -342,7 +342,7 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                 const minR = decodeSigned(bytes, pos)
                 const maxR = decodeSigned(bytes, minR.next)
                 pos = maxR.next
-                push(integer(minR.value, maxR.value, 0))
+                push(integer(minR.value, maxR.value, {default: 0}))
                 break
             }
             case PUSH_INT_EXT:
@@ -351,7 +351,7 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                 const maxR = decodeSigned(bytes, minR.next)
                 const defR = decodeSigned(bytes, maxR.next)
                 pos = defR.next
-                push(integer(minR.value, maxR.value, defR.value))
+                push(integer(minR.value, maxR.value, {default: defR.value}))
                 break
             }
             case LIST_OP:
@@ -364,7 +364,7 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
             {
                 const capR = decodeLeb128(bytes, pos); pos = capR.next
                 const element = popN(1)[0]!
-                push(list(element, capR.value))
+                push(list(element, {capacity: capR.value}))
                 break
             }
             case STRUCT_EXT:

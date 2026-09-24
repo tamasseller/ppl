@@ -75,14 +75,14 @@ test("ts-alternative-rules: byteListAsUint8ArrayRule doesn't claim a wider-range
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 test("ts-alternative-rules: capacityOneListAsOptionalRule collapses a capacity-1 list to T | null", () => {
-    const T = struct({maybe: list(integer(0, 255), 1)})
+    const T = struct({maybe: list(integer(0, 255), {capacity: 1})})
     const r = projectTSTypes(T, [capacityOneListAsOptionalRule, ...tsTypeRules])
     assert.ok(r.get(0)!.decl!.includes("maybe: number | null;"))
     assertCompiles(emitTSDeclarations(r))
 })
 
 test("ts-alternative-rules: capacityOneListAsOptionalRule doesn't claim a wider-capacity list", () => {
-    const T = struct({items: list(integer(0, 255), 8)})
+    const T = struct({items: list(integer(0, 255), {capacity: 8})})
     const r = projectTSTypes(T, [capacityOneListAsOptionalRule, ...tsTypeRules])
     assert.ok(r.get(0)!.decl!.includes("items: number[];"))
     assertCompiles(emitTSDeclarations(r))

@@ -12,15 +12,15 @@ import {defaultValueOf, i8, integer, list, named, nameOf, optional, struct, u8, 
 import {buildTypeGraph, child} from "../../src/core/type-graph"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
-// integer: default defaults to 0, third argument overrides it
+// integer: default defaults to 0, the `default` option overrides it
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 test("integer: default is 0 when omitted", () => {
     assert.equal(integer(0, 255).default, 0)
 })
 
-test("integer: third argument sets an explicit default", () => {
-    assert.equal(integer(0, 255, 7).default, 7)
+test("integer: the `default` option sets an explicit default", () => {
+    assert.equal(integer(0, 255, {default: 7}).default, 7)
 })
 
 test("integer: shared range constants (u8/i8) default to 0", () => {
@@ -78,19 +78,19 @@ test("defaultValueOf: unit is undefined", () => {
 
 test("defaultValueOf: integer is its own declared default", () => {
     assert.equal(defaultValueOf(integer(0, 255)), 0)
-    assert.equal(defaultValueOf(integer(0, 255, 42)), 42)
+    assert.equal(defaultValueOf(integer(0, 255, {default: 42})), 42)
 })
 
 test("defaultValueOf: list is always empty, regardless of element type", () => {
     assert.deepEqual(defaultValueOf(list(integer(0, 255))), [])
-    assert.deepEqual(defaultValueOf(list(struct({a: integer(0, 255, 5)}))), [])
+    assert.deepEqual(defaultValueOf(list(struct({a: integer(0, 255, {default: 5})}))), [])
 })
 
 test("defaultValueOf: struct composes its own fields' defaults recursively", () => {
     const T = struct({
         id: u8,
-        quality: integer(0, 255, 7),
-        nested: struct({flag: unit, count: integer(0, 100, 3)}),
+        quality: integer(0, 255, {default: 7}),
+        nested: struct({flag: unit, count: integer(0, 100, {default: 3})}),
     })
     assert.deepEqual(defaultValueOf(T), {
         id: 0,
@@ -122,7 +122,7 @@ test("defaultValueOf: struct field of a union type WITH a default composes clean
 })
 
 test("defaultValueOf: follows reference thunks", () => {
-    const T = () => integer(0, 255, 9)
+    const T = () => integer(0, 255, {default: 9})
     assert.equal(defaultValueOf(T), 9)
 })
 

@@ -87,7 +87,7 @@ describe("type tree wire — leaves", () =>
 
     test("min=0, non-zero default uses the 2-operand extended form", () =>
     {
-        roundTrip(integer(0, 1000, 7))
+        roundTrip(integer(0, 1000, {default: 7}))
     })
 
     test("default=0, non-zero min uses the 2-operand (min,max) extended form", () =>
@@ -97,13 +97,13 @@ describe("type tree wire — leaves", () =>
 
     test("arbitrary min/max/default uses the fully general extended form", () =>
     {
-        roundTrip(integer(-40, 125, 20))
+        roundTrip(integer(-40, 125, {default: 20}))
     })
 
     test("negative min/max/default round-trip correctly (zigzag sign)", () =>
     {
-        assert.equal(derefType(roundTrip(integer(-100, -1, -50)).decoded).kind, SemanticTypeKinds.Integer)
-        const d = derefType(roundTrip(integer(-100, -1, -50)).decoded)
+        assert.equal(derefType(roundTrip(integer(-100, -1, {default: -50})).decoded).kind, SemanticTypeKinds.Integer)
+        const d = derefType(roundTrip(integer(-100, -1, {default: -50})).decoded)
         assert.deepEqual(d, { kind: SemanticTypeKinds.Integer, min: -100, max: -1, default: -50 })
     })
 
@@ -123,7 +123,7 @@ describe("type tree wire — list", () =>
 
     test("capacitated list carries its capacity", () =>
     {
-        const { decoded } = roundTrip(list(u8, 16))
+        const { decoded } = roundTrip(list(u8, {capacity: 16}))
         assert.equal((derefType(decoded) as { capacity?: number }).capacity, 16)
     })
 })
@@ -276,7 +276,7 @@ describe("type tree wire — a realistic schema", () =>
         const TelemetryPacket = struct({
             deviceId: integer(0, 0xFFFFFFFF),
             timestamp: Timestamp,
-            readings: list(SensorReading, 16),
+            readings: list(SensorReading, {capacity: 16}),
             status: integer(0, 0xFFFF),
         })
         roundTrip(TelemetryPacket)

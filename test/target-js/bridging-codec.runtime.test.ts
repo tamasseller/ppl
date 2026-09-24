@@ -61,7 +61,7 @@ describe("bridging: nothing to bridge — byte-identical to the ordinary (non-br
 
 describe("bridging: struct, image-only field (§4.4)", () =>
 {
-    const Image = named("Widget", struct({ a: u8, extra: integer(0, 255, 42) }))
+    const Image = named("Widget", struct({ a: u8, extra: integer(0, 255, {default: 42}) }))
     const Local = named("Widget", struct({ a: u8 }))
 
     test("decode: the image-only field is dropped, cursor still lands correctly on the field after it", () =>
@@ -88,7 +88,7 @@ describe("bridging: struct, image-only field (§4.4)", () =>
 describe("bridging: struct, local-only field (§4.4)", () =>
 {
     const Image = named("Widget", struct({ a: u8 }))
-    const Local = named("Widget", struct({ a: u8, extra: integer(0, 255, 7) }))
+    const Local = named("Widget", struct({ a: u8, extra: integer(0, 255, {default: 7}) }))
 
     test("decode: the local-only field is seeded with its own declared default", () =>
     {
@@ -116,7 +116,7 @@ describe("bridging: struct, local-only field (§4.4)", () =>
         const ImageNested = named("Nested", struct({ a: u8 }))
         const LocalNested = named("Nested", struct({
             a: u8,
-            pos: named("Pos", struct({ x: integer(0, 255, 1), y: integer(0, 255, 2) })),
+            pos: named("Pos", struct({ x: integer(0, 255, {default: 1}), y: integer(0, 255, {default: 2}) })),
         }))
 
         const image = imageOf(ImageNested)
@@ -187,7 +187,7 @@ describe("bridging: list of structs — per-element divergence propagates throug
 {
     test("decode: each element's own image-only field is dropped, not just the list's own boundary", () =>
     {
-        const Image = named("Container", struct({ items: list(named("Item", struct({ a: u8, extra: integer(0, 255, 9) }))) }))
+        const Image = named("Container", struct({ items: list(named("Item", struct({ a: u8, extra: integer(0, 255, {default: 9}) }))) }))
         const Local = named("Container", struct({ items: list(named("Item", struct({ a: u8 }))) }))
 
         const image = imageOf(Image)

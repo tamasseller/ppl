@@ -97,7 +97,7 @@ describe("resolveProcedureTypes — cross-checked against header (ground truth)"
     test("list of structs — ENTER_NEXT/CALL_CODEC_NEXT", () =>
     {
         const Item = named("Item", struct({ v: u8 }))
-        const T = named("Batch", struct({ items: list(Item, 8) }))
+        const T = named("Batch", struct({ items: list(Item, {capacity: 8}) }))
         const program = buildCodec(T, binaryEncodeRules, undefined)
         assertMatchesHeaders(program, resolveProcedureTypes(program, T))
     })
@@ -121,7 +121,7 @@ describe("resolveProcedureTypes — robust to a program with no header at all", 
     test("bytecode round-trip strips header; resolveProcedureTypes still recovers the same types", () =>
     {
         const Inner = named("Inner", struct({ a: u8 }))
-        const Outer = named("Outer", struct({ inner: Inner, list: list(u8, 4), b: u8 }))
+        const Outer = named("Outer", struct({ inner: Inner, list: list(u8, {capacity: 4}), b: u8 }))
         const program = buildCodec(Outer, binaryEncodeRules, undefined)
 
         const decoded = decodeProgram(encodeProgram(program, wireExtension), 0, wireExtension).program
@@ -209,8 +209,8 @@ describe("resolveHandleCorrespondences / correspondenceChild / correspondenceEle
     {
         const ItemImage = named("Item", struct({ v: u8, extra: u8 }))
         const ItemLocal = named("Item", struct({ v: u8 }))
-        const TImage = named("Batch", struct({ items: list(ItemImage, 4) }))
-        const TLocal = named("Batch", struct({ items: list(ItemLocal, 4) }))
+        const TImage = named("Batch", struct({ items: list(ItemImage, {capacity: 4}) }))
+        const TLocal = named("Batch", struct({ items: list(ItemLocal, {capacity: 4}) }))
 
         const program = buildCodec(TImage, binaryEncodeRules, undefined)
         const root = reconcile(buildTypeGraph(TImage).root, buildTypeGraph(TLocal).root)

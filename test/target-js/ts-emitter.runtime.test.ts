@@ -45,7 +45,7 @@ test("ts-emitter: struct projects to interface with readonly fields", () => {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 test("ts-emitter: list projects to T[] inline", () => {
-    const T = struct({items: list(integer(0, 255), 8)})
+    const T = struct({items: list(integer(0, 255), {capacity: 8})})
     const r = projectTSTypes(T, tsTypeRules)
 
     const decl = r.get(0)!.decl!

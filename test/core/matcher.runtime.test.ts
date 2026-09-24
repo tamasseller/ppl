@@ -53,7 +53,7 @@ test("unit matches unit pattern", () => {
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 test("list: element match propagates", () => {
-    const T = list(integer(0, 15), 8)
+    const T = list(integer(0, 15), {capacity: 8})
     const m = matchType(T, pList(pInteger(0, 255)))
     assert.equal(m?.kind, SemanticTypeKinds.List)
     assert.equal(m?.kind === SemanticTypeKinds.List && m.capacity, 8)
@@ -64,7 +64,7 @@ test("list: element match propagates", () => {
 })
 
 test("list: capacityMax violated fails", () => {
-    assert.equal(matchType(list(integer(0, 15), 1024), pList(pInteger(0, 255), 256)), undefined)
+    assert.equal(matchType(list(integer(0, 15), {capacity: 1024}), pList(pInteger(0, 255), 256)), undefined)
 })
 
 test("list: element pattern mismatch fails", () => {
@@ -180,7 +180,7 @@ test("anyof: all alternatives fail -> undefined", () => {
 })
 
 test("anyof: re-dispatches through nested matchers (list-of-anyof element)", () => {
-    const T = list(unit, 4)
+    const T = list(unit, {capacity: 4})
     const m = matchType(T, pList(pAnyOf(() => [pInteger(0, 1), pUnit()])))
     assert.equal(m?.kind, SemanticTypeKinds.List)
     const em = m?.kind === SemanticTypeKinds.List && m.elementMatch

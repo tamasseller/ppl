@@ -186,13 +186,13 @@ describe("resolve(): struct field — all four cells are real (§4.4 table)", ()
 
     test("image-only field, encode → default from the image (§4.4)", () =>
     {
-        const c = reconcile(root(struct({ extra: integer(0, 255, 7) })), root(struct({})))
+        const c = reconcile(root(struct({ extra: integer(0, 255, {default: 7}) })), root(struct({})))
         assert.deepEqual(resolve(c, edgeOf(c, "extra"), "encode"), { action: "default", value: 7 })
     })
 
     test("local-only field, decode → default from local (§4.4)", () =>
     {
-        const c = reconcile(root(struct({})), root(struct({ extra: integer(0, 255, 9) })))
+        const c = reconcile(root(struct({})), root(struct({ extra: integer(0, 255, {default: 9}) })))
         assert.deepEqual(resolve(c, edgeOf(c, "extra"), "decode"), { action: "default", value: 9 })
     })
 
