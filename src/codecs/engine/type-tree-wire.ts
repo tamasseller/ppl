@@ -58,12 +58,15 @@ const PUSH_INT_MIN0_DEF_EXT = 0xC8
 const PUSH_INT_EXT = 0xC9
 const PUSH_INT_DEF_EXT = 0xCA
 const LIST_OP = 0xCB
-const LIST_EXT = 0xCC
+const LIST_MAX_EXT = 0xCC
 const STRUCT_EXT = 0xCD
 const UNION_EXT = 0xCE
 const PUSH_REF_EXT = 0xCF
 const END = 0xD0
 const MEANING = 0xD1
+const LIST_FIXED_EXT = 0xD2
+const LIST_RANGE_EXT = 0xD3
+const LIST_MIN_EXT = 0xD4
 
 /** Every canonical width `metamodel.ts` exports — none declares a default. */
 const CANONICAL: ReadonlyArray<readonly [number, IntegerType]> = [
@@ -106,6 +109,17 @@ function encodeInteger(t: IntegerType): number[]
 
     if(t.min === 0) return [PUSH_INT_MIN0_DEF_EXT, ...encodeLeb128(t.max), ...encodeSigned(t.default)]
     return [PUSH_INT_DEF_EXT, ...encodeSigned(t.min), ...encodeSigned(t.max), ...encodeSigned(t.default)]
+}
+
+// ── List length bounds ───────────────────────────────────────────────────
+
+function encodeListBounds(minLength: number, maxLength: number | undefined): number[]
+{
+    if(maxLength === undefined)
+        return minLength === 0 ? [LIST_OP] : [LIST_MIN_EXT, ...encodeLeb128(minLength)]
+    if(minLength === maxLength) return [LIST_FIXED_EXT, ...encodeLeb128(minLength)]
+    if(minLength === 0) return [LIST_MAX_EXT, ...encodeLeb128(maxLength)]
+    return [LIST_RANGE_EXT, ...encodeLeb128(minLength), ...encodeLeb128(maxLength)]
 }
 
 // ── String table + name specification (§3.3) ────────────────────────────
@@ -192,7 +206,7 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
         {
             case SemanticTypeKinds.Unit: return "u"
             case SemanticTypeKinds.Integer: return `i:${t.min}:${t.max}:${t.default ?? "-"}:${t.meaning ?? "-"}`
-            case SemanticTypeKinds.List: return `l:${t.capacity ?? "-"}:${signatureOf(t.elementType)}`
+            case SemanticTypeKinds.List: return `l:${t.minLength}:${t.maxLength ?? "-"}:${signatureOf(t.elementType)}`
             case SemanticTypeKinds.Struct:
                 return `s:${[...t.fields.entries()].map(([k, v]) => `${k}=${signatureOf(v)}`).join(",")}`
             case SemanticTypeKinds.Union:
@@ -229,7 +243,7 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
             case SemanticTypeKinds.List:
             {
                 encodeNode(t.elementType)
-                instructions.push(...(t.capacity === undefined ? [LIST_OP] : [LIST_EXT, ...encodeLeb128(t.capacity)]))
+                instructions.push(...encodeListBounds(t.minLength, t.maxLength))
                 break
             }
             case SemanticTypeKinds.Struct:
@@ -321,7 +335,7 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                 const defR = decodeLeb128(bytes, pos)
                 pos = defR.next
                 const defaultVariant = defR.value === 0 ? undefined : spec.values[defR.value - 1]
-                push(union(fields, defaultVariant))
+                push(union(fields, {defaultVariant}))
             }
         }
         else if(family === FAMILY_REF)
@@ -375,11 +389,30 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                 push(list(element))
                 break
             }
-            case LIST_EXT:
+            case LIST_MAX_EXT:
             {
-                const capR = decodeLeb128(bytes, pos); pos = capR.next
-                const element = popN(1)[0]!
-                push(list(element, {capacity: capR.value}))
+                const maxR = decodeLeb128(bytes, pos); pos = maxR.next
+                push(list(popN(1)[0]!, {maxLength: maxR.value}))
+                break
+            }
+            case LIST_FIXED_EXT:
+            {
+                const nR = decodeLeb128(bytes, pos); pos = nR.next
+                push(list(popN(1)[0]!, {minLength: nR.value, maxLength: nR.value}))
+                break
+            }
+            case LIST_RANGE_EXT:
+            {
+                const minR = decodeLeb128(bytes, pos)
+                const maxR = decodeLeb128(bytes, minR.next)
+                pos = maxR.next
+                push(list(popN(1)[0]!, {minLength: minR.value, maxLength: maxR.value}))
+                break
+            }
+            case LIST_MIN_EXT:
+            {
+                const minR = decodeLeb128(bytes, pos); pos = minR.next
+                push(list(popN(1)[0]!, {minLength: minR.value}))
                 break
             }
             case STRUCT_EXT:
@@ -399,7 +432,7 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                     const defR = decodeLeb128(bytes, pos)
                     pos = defR.next
                     const defaultVariant = defR.value === 0 ? undefined : spec.values[defR.value - 1]
-                    push(union(fields, defaultVariant))
+                    push(union(fields, {defaultVariant}))
                 }
                 break
             }

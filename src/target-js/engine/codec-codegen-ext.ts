@@ -25,16 +25,17 @@
 
 import type {Stmt, Expr} from "mog-core"
 import {ExprKind, StmtKind} from "mog-core"
-import type {TypeNode} from "../../core/index"
+import type {TypeNode, ConcreteSemanticType, IntegerType, ListType} from "../../core/index"
 import {kindOf, concreteKindOf, SemanticTypeKinds} from "../../core/index"
-import type {Direction, Correspondence, Resolution} from "../../core/index"
-import {resolve} from "../../core/index"
+import type {Direction, Correspondence, Resolution, Check} from "../../core/index"
+import {resolve, classify} from "../../core/index"
 import type {CodecExtInstr} from "../../codecs/index"
 import {requireSlotNode, intWireSize, assertNever, correspondenceChild, correspondenceElement} from "../../codecs/index"
 import type {Accessor, TSTypeDecl} from "./resolver"
 import {LineBuilder} from "./line-builder"
 import {requireEdge, variantNamesOf, describeType} from "./codec-type-nav"
 import {translateExpr} from "./codec-codegen"
+import {wireWindow, inDomain, applyOutOfDomain} from "./codec-checks"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Generation context
@@ -86,6 +87,10 @@ export interface GenCtx
      *  unconditionally, since wire-format concerns (width, tag order) are
      *  always the image's to define, reconciled or not. */
     readonly correspondences?: Map<number, Correspondence>
+    /** A position per slot for error messages, when no `Correspondence` names one. */
+    readonly slotPaths: Map<number, string>
+    /** List slots whose decode-side element counter `__n${slot}` is declared. */
+    readonly lenDeclared: Set<number>
 }
 
 export function accessorFor(node: TypeNode, g: GenCtx): Accessor
@@ -148,6 +153,187 @@ function scratchAccessorFor(kind: SemanticTypeKinds): Accessor
             beginList: () => "[]", appendElement: (acc, v) => `${acc}.push(${v})`,
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Checks (docs/reconciliation.md §5)
+// ─────────────────────────────────────────────────────────────────────────
+
+function pathOf(slot: number, g: GenCtx): string
+{
+    return g.correspondences?.get(slot)?.path ?? g.slotPaths.get(slot) ?? `slot ${slot}`
+}
+
+/** The checks a bridged, matched slot needs; none for any other slot. */
+function checksOf(slot: number, g: GenCtx): readonly Check[]
+{
+    const c = g.correspondences?.get(slot)
+    if(c?.outcome !== "matched") return []
+    const r = classify(c, g.direction)
+    return r.action === "bridge" ? r.checks ?? [] : []
+}
+
+/** The type an application value is validated against: the local one when bridging. */
+function localTypeOf(slot: number, g: GenCtx): ConcreteSemanticType
+{
+    return g.correspondences?.get(slot)?.localNode?.type ?? requireSlotNode(g.slotTypes, slot, "local type").type
+}
+
+function localElementNode(slot: number, g: GenCtx): TypeNode
+{
+    const local = g.correspondences?.get(slot)?.localNode ?? requireSlotNode(g.slotTypes, slot, "list element")
+    return local.edges.find(e => "element" in e.step)!.target
+}
+
+/** A decoded integer as a checked plain number: validated against the image's
+ *  range where the wire can carry more, then the bridge's out-of-domain policy.
+ *  `undefined` when neither applies, so the caller keeps its unchecked form. */
+function checkedDecodedNumber(t: IntegerType, raw: string, checks: readonly Check[], where: string): string | undefined
+{
+    const width = intWireSize(t)
+    const signed = t.min < 0
+    const [lo, hi] = wireWindow(width, signed)
+    const validate = lo < t.min || t.max < hi
+    if(!validate && checks.length === 0) return undefined
+    const n = signed ? `signExtend(${width * 8}, ${raw})` : raw
+    return applyOutOfDomain(validate ? inDomain(n, t.min, t.max, `malformed value at ${where}`) : n, checks, where)
+}
+
+/** An application integer, validated against the local range, then the bridge's policy. */
+function checkedEncodedNumber(t: IntegerType, value: string, checks: readonly Check[], where: string): string
+{
+    return applyOutOfDomain(inDomain(value, t.min, t.max, `invalid value at ${where}`), checks, where)
+}
+
+/** Whether decode counts this list's elements: to validate its length against
+ *  the image's bounds, or for a bridge check. */
+function tracksLength(slot: number, g: GenCtx): boolean
+{
+    if(g.direction !== "decode") return false
+    const t = requireSlotNode(g.slotTypes, slot, "list length").type as ListType
+    return t.minLength > 0 || t.maxLength !== undefined || checksOf(slot, g).length > 0
+}
+
+/** One decoded element into list slot `list`, counted, and under `truncate`
+ *  dropped past `maxLength`. `append` is the statement that appends it. */
+function emitCountedAppend(list: number, append: string, g: GenCtx, b: LineBuilder): void
+{
+    if(!tracksLength(list, g)) { b.line(append); return }
+    const truncate = checksOf(list, g).find((k): k is Extract<Check, {cause: "over-length"}> => k.cause === "over-length" && k.policy === "truncate")
+    if(truncate) b.block(`if (__n${list} < ${truncate.maxLength}) {`, () => b.line(append))
+    else b.line(append)
+    b.line(`__n${list}++;`)
+}
+
+/** Encode's element count, validated against the local bounds, then the
+ *  bridge's over/under-length policies. */
+function checkedEncodedCount(slot: number, count: string, g: GenCtx): string
+{
+    const t = localTypeOf(slot, g) as ListType
+    const where = pathOf(slot, g)
+    let c = t.minLength > 0 || t.maxLength !== undefined ? inDomain(count, t.minLength, t.maxLength ?? Infinity, `invalid length at ${where}`) : count
+    for(const k of checksOf(slot, g))
+    {
+        if(k.cause === "over-length") c = k.policy === "trap" ? inDomain(c, 0, k.maxLength, `too long at ${where}`) : `Math.min(${c}, ${k.maxLength})`
+        else if(k.cause === "under-length") c = k.policy === "trap" ? inDomain(c, k.minLength, Infinity, `too short at ${where}`) : `Math.max(${c}, ${k.minLength})`
+    }
+    return c
+}
+
+const padsOnEncode = (slot: number, g: GenCtx): boolean =>
+    g.direction === "encode" && checksOf(slot, g).some(k => k.cause === "under-length" && k.policy === "pad")
+
+/** Encode's element read; under `pad`, past the real length, the local element's default. */
+function encodedElement(list: number, index: string, g: GenCtx, b: LineBuilder): string
+{
+    const access = expectAccessor(localAccessorFor(list, g), "list", requireSlotNode(g.slotTypes, list, "element read"))
+    if(!padsOnEncode(list, g)) return access.elementAt(`v${list}`, index)
+    const i = `__i${g.tempCounter.n++}`
+    b.line(`const ${i} = ${index};`)
+    const def = emitDefaultValue(localElementNode(list, g), `${pathOf(list, g)}[]`, n => accessorFor(n, g), g, b)
+    return `(${i} < ${access.count(`v${list}`)} ? ${access.elementAt(`v${list}`, i)} : ${def})`
+}
+
+/** Decode's length checks at the list's close: validation against the image's
+ *  bounds, then the `trap` policies, then `pad`. */
+function emitLengthClose(g: GenCtx, b: LineBuilder): void
+{
+    const t = requireSlotNode(g.slotTypes, 0, "list close").type as ListType
+    const where = pathOf(0, g)
+    if(t.minLength > 0 || t.maxLength !== undefined)
+        b.line(`${inDomain("__n0", t.minLength, t.maxLength ?? Infinity, `malformed length at ${where}`)};`)
+    for(const k of checksOf(0, g))
+    {
+        if(k.cause === "over-length" && k.policy === "trap")
+            b.line(`${inDomain("__n0", 0, k.maxLength, `too long at ${where}`)};`)
+        else if(k.cause === "under-length" && k.policy === "trap")
+            b.line(`${inDomain("__n0", k.minLength, Infinity, `too short at ${where}`)};`)
+        else if(k.cause === "under-length")
+        {
+            const access = expectAccessor(localAccessorFor(0, g), "list", requireSlotNode(g.slotTypes, 0, "list pad"))
+            b.block(`while (__n0 < ${k.minLength}) {`, () =>
+            {
+                const def = emitDefaultValue(localElementNode(0, g), `${where}[]`, n => accessorFor(n, g), g, b)
+                b.line(`${access.appendElement?.("v0", def) ?? `v0.push(${def})`};`)
+                b.line("__n0++;")
+            })
+        }
+    }
+}
+
+/** `READ_SEQ`/`WRITE_SEQ` as statements, when a check rules out the bulk
+ *  transfer or needs statements around it. `false`: the plain bulk form applies. */
+function emitCheckedSeq(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext}>, g: GenCtx, b: LineBuilder): boolean
+{
+    if(e.ext !== "READ_SEQ" && e.ext !== "WRITE_SEQ") return false
+    const list = e.handle
+    const listNode = requireSlotNode(g.slotTypes, list, e.ext)
+    const where = `${pathOf(list, g)}[]`
+    const listCorr = g.correspondences?.get(list)
+    const elemCorr = listCorr?.outcome === "matched" ? correspondenceElement(listCorr) : undefined
+    const elemChecks = elemCorr?.outcome === "matched" ? (r => r.action === "bridge" ? r.checks ?? [] : [])(classify(elemCorr, g.direction)) : []
+    const count = translateExpr(e.args[0]!, g)
+
+    if(e.ext === "READ_SEQ")
+    {
+        const elemType = requireEdge(listNode, 0, "READ_SEQ").target.type as IntegerType
+        const checked = checkedDecodedNumber(elemType, "__raw", elemChecks, where)
+        const truncates = checksOf(list, g).some(k => k.cause === "over-length" && k.policy === "truncate")
+        if(checked === undefined && !truncates)
+        {
+            if(!tracksLength(list, g)) return false
+            const c = `__c${g.tempCounter.n++}`
+            b.line(`const ${c} = ${count};`)
+            b.line(`${translateExt(e, g, c)};`)
+            b.line(`__n${list} += ${c};`)
+            return true
+        }
+        const c = `__c${g.tempCounter.n++}`
+        b.line(`const ${c} = ${count};`)
+        b.block(`for (let __k = 0; __k < ${c}; __k++) {`, () =>
+        {
+            b.line(`const __raw = read(ctx, ${e.iter}, ${e.width});`)
+            emitCountedAppend(list, `v${list}.push(${checked ?? (e.signed ? `signExtend(${e.width * 8}, __raw)` : "__raw")});`, g, b)
+        })
+        return true
+    }
+
+    const access = expectAccessor(localAccessorFor(list, g), "list", listNode)
+    const elemType = (elemCorr?.localNode ?? requireEdge(listNode, 0, "WRITE_SEQ").target).type as IntegerType
+    const c = `__c${g.tempCounter.n++}`
+    b.line(`const ${c} = ${count};`)
+    if(elemChecks.length === 0 && !padsOnEncode(list, g))
+    {
+        b.line(`for (let __k = 0; __k < ${c}; __k++) ${inDomain(access.elementAt(`v${list}`, "__k"), elemType.min, elemType.max, `invalid value at ${where}`)};`)
+        b.line(`${translateExt(e, g, c)};`)
+        return true
+    }
+    b.block(`for (let __k = 0; __k < ${c}; __k++) {`, () =>
+    {
+        const y = encodedElement(list, "__k", g, b)
+        b.line(`write(ctx, ${e.iter}, ${e.width}, ${checkedEncodedNumber(elemType, y, elemChecks, where)});`)
+    })
+    return true
 }
 
 /**
@@ -316,7 +502,9 @@ export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number
 // Nestable-expression ops
 // ─────────────────────────────────────────────────────────────────────────
 
-export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext}>, g: GenCtx): string
+/** `seqCount`: `emitCheckedSeq`'s already-evaluated count, for a bulk
+ *  transfer it has wrapped in statements. */
+export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext}>, g: GenCtx, seqCount?: string): string
 {
     const arg = (i: number): string => translateExpr(e.args[i]!, g)
 
@@ -329,13 +517,14 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
         case "LOAD_VAL":
             {
                 const node = requireSlotNode(g.slotTypes, e.src, "LOAD_VAL")
-                return expectAccessor(localAccessorFor(e.src, g), "integer", node).toWire(`v${e.src}`)
+                const value = checkedEncodedNumber(localTypeOf(e.src, g) as IntegerType, `v${e.src}`, checksOf(e.src, g), pathOf(e.src, g))
+                return expectAccessor(localAccessorFor(e.src, g), "integer", node).toWire(value)
             }
 
         case "COUNT":
             {
                 const node = requireSlotNode(g.slotTypes, e.src, "COUNT")
-                return expectAccessor(localAccessorFor(e.src, g), "list", node).count(`v${e.src}`)
+                return checkedEncodedCount(e.src, expectAccessor(localAccessorFor(e.src, g), "list", node).count(`v${e.src}`), g)
             }
 
         case "TAG":
@@ -347,7 +536,11 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
                 // order, reconciled or not (docs/reconciliation.md §4.1).
                 const node = requireSlotNode(g.slotTypes, e.src, "TAG")
                 const activeName = expectAccessor(localAccessorFor(e.src, g), "union", node).activeVariantName(`v${e.src}`)
-                return `tagOf(${activeName}, ${JSON.stringify(variantNamesOf(node))})`
+                const names = variantNamesOf(node)
+                const unknown = checksOf(e.src, g).find((k): k is Extract<Check, {cause: "unknown-variant"}> => k.cause === "unknown-variant")
+                if(!unknown) return `tagOf(${activeName}, ${JSON.stringify(names)})`
+                const fallback = unknown.policy === "trap" ? -1 : names.indexOf(unknown.policy.replace)
+                return `tagOf(${activeName}, ${JSON.stringify(names)}, ${fallback}, ${JSON.stringify(pathOf(e.src, g))})`
             }
 
         case "READ": return `read(ctx, ${e.iter}, ${e.width})`
@@ -362,7 +555,8 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
                 const node = requireSlotNode(g.slotTypes, e.handle, "WRITE_SEQ")
                 const bulk = expectAccessor(localAccessorFor(e.handle, g), "list", node).bulk
                 if(!bulk) throw new Error(`codec-codegen: no bulk sequential-transfer support for ${describeType(node)} (node #${node.id}) — the rule that claimed this type's Accessor doesn't provide "bulk"`)
-                return bulk.writeSeq(`v${e.handle}`, `${e.iter}`, `${e.width}`, arg(0))
+                if(seqCount === undefined) throw new Error(`codec-codegen: WRITE_SEQ validates its elements, so it has to be its own statement`)
+                return bulk.writeSeq(`v${e.handle}`, `${e.iter}`, `${e.width}`, seqCount)
             }
 
         case "READ_SEQ":
@@ -370,7 +564,7 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
                 const node = requireSlotNode(g.slotTypes, e.handle, "READ_SEQ")
                 const bulk = expectAccessor(localAccessorFor(e.handle, g), "list", node).bulk
                 if(!bulk) throw new Error(`codec-codegen: no bulk sequential-transfer support for ${describeType(node)} (node #${node.id}) — the rule that claimed this type's Accessor doesn't provide "bulk"`)
-                return bulk.readSeq(`v${e.handle}`, `${e.iter}`, `${e.width}`, `${e.signed}`, arg(0))
+                return bulk.readSeq(`v${e.handle}`, `${e.iter}`, `${e.width}`, `${e.signed}`, seqCount ?? arg(0))
             }
 
         default:
@@ -412,7 +606,7 @@ function emitWriteBack(slot: number, value: string, g: GenCtx, b: LineBuilder): 
     else
     {
         const access = expectAccessor(localAccessorFor(wb.parentSlot, g), "list", parentNode)
-        b.line(`${access.appendElement?.(`v${wb.parentSlot}`, `v${slot}`) ?? `v${wb.parentSlot}.push(v${slot})`};`)
+        emitCountedAppend(wb.parentSlot, `${access.appendElement?.(`v${wb.parentSlot}`, `v${slot}`) ?? `v${wb.parentSlot}.push(v${slot})`};`, g, b)
     }
 }
 
@@ -440,6 +634,7 @@ function emitEnter(dst: number, src: number, ref: number, g: GenCtx, b: LineBuil
     const edge = requireEdge(srcNode, ref, "ENTER")
     const name = (edge.step as {field: string}).field
     g.slotTypes.set(dst, edge.target)
+    g.slotPaths.set(dst, `${pathOf(src, g)}.${name}`)
 
     // Bridging (docs/reconciliation.md §4): a struct field's own edge is
     // either "matched" (bridge — everything below is unaffected), an
@@ -498,6 +693,7 @@ function emitEnterNext(dst: number, src: number, g: GenCtx, b: LineBuilder): voi
     const edge = requireEdge(srcNode, 0, "ENTER_NEXT")
     g.writeBacks.set(dst, {into: "append", parentSlot: src})
     g.slotTypes.set(dst, edge.target)
+    g.slotPaths.set(dst, `${pathOf(src, g)}[]`)
 
     // A list's own element edge is always "matched" once its own kind
     // check passes (`reconcile.ts`'s own doc comment) — only what's
@@ -519,10 +715,9 @@ function emitEnterNext(dst: number, src: number, g: GenCtx, b: LineBuilder): voi
     }
     else
     {
-        const access = localAccessorFor(src, g)
-        if(access.kind !== "list") throw new Error(`codec-codegen: ENTER_NEXT's parent (slot ${src}) isn't list-kind`)
+        if(localAccessorFor(src, g).kind !== "list") throw new Error(`codec-codegen: ENTER_NEXT's parent (slot ${src}) isn't list-kind`)
         const idx = idxCounter(src, g, b)
-        b.line(`v${dst} = ${access.elementAt(`v${src}`, `${idx}++`)};`)
+        b.line(`v${dst} = ${encodedElement(src, `${idx}++`, g, b)};`)
     }
 }
 
@@ -530,10 +725,11 @@ function emitStoreVal(src: number, arg0: Expr<CodecExtInstr>, g: GenCtx, b: Line
 {
     const node = requireSlotNode(g.slotTypes, src, "STORE_VAL")
     const raw = translateExpr(arg0, g)
-    const value = kindOf(node.type) === SemanticTypeKinds.Integer
-        ? expectAccessor(localAccessorFor(src, g), "integer", node).fromWire(raw, intWireSize(node.type as {min: number, max: number}), (node.type as {min: number}).min < 0)
-        : raw
-    emitWriteBack(src, value, g, b)
+    if(kindOf(node.type) !== SemanticTypeKinds.Integer) { emitWriteBack(src, raw, g, b); return }
+    const t = node.type as IntegerType
+    const access = expectAccessor(localAccessorFor(src, g), "integer", node)
+    const checked = checkedDecodedNumber(t, raw, checksOf(src, g), pathOf(src, g))
+    emitWriteBack(src, checked === undefined ? access.fromWire(raw, intWireSize(t), t.min < 0) : access.fromWire(checked, intWireSize(t), false), g, b)
 }
 
 function emitOpenList(src: number, g: GenCtx, b: LineBuilder): void
@@ -541,6 +737,10 @@ function emitOpenList(src: number, g: GenCtx, b: LineBuilder): void
     const node = requireSlotNode(g.slotTypes, src, "OPEN_LIST")
     const access = expectAccessor(localAccessorFor(src, g), "list", node)
     b.line(`v${src} = ${access.beginList?.() ?? "[]"};`)
+    if(!tracksLength(src, g)) return
+    if(src !== 0) throw new Error(`codec-codegen: the length of the list at ${pathOf(src, g)} is checked, which needs the list to be its own procedure`)
+    b.line(`${g.lenDeclared.has(src) ? "" : "let "}__n${src} = 0;`)
+    g.lenDeclared.add(src)
 }
 
 /** `CALL_CODEC`/`CALL_CODEC_NEXT` — the one place a real function call
@@ -597,28 +797,31 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
         }
     }
 
-    if(resolution?.action === "trap" || resolution?.action === "unreachable")
+    if(resolution?.action === "unreachable")
     {
-        const reason = resolution.action === "trap" ? resolution.reason : "structurally unreachable (docs/reconciliation.md §4.5)"
-        b.line(`throw new CodecTrap(-1, ${JSON.stringify(reason)});`)
+        b.line(`throw new CodecTrap(-1, ${JSON.stringify(`structurally unreachable at ${childCorr!.path}`)});`)
+        return
+    }
+
+    const unknown = resolution?.action === "bridge"
+        ? resolution.checks?.find((k): k is Extract<Check, {cause: "unknown-variant"}> => k.cause === "unknown-variant")
+        : undefined
+    if(unknown)
+    {
+        const variant = (edge.step as {variant: string}).variant
+        if(unknown.policy === "trap" || g.direction === "encode")
+        {
+            b.line(`throw new CodecTrap(-1, ${JSON.stringify(`unknown variant "${variant}" at ${parentCorr!.path}`)});`)
+            return
+        }
+        // §4.5: the callee still consumes the payload, so the cursor stays right.
+        b.line(`${g.direction}_proc${calleeIndex}(ctx);`)
+        emitWriteBack(src, expectAccessor(access, "union", srcNode).finishUnion(unknown.policy.replace, undefined), g, b)
         return
     }
 
     if(g.direction === "decode")
     {
-        if(resolution?.action === "default")
-        {
-            // Union image-only variant, local declares a default (§4.5):
-            // still call the callee to correctly consume its own wire
-            // bytes (the bytecode already knows this variant's shape),
-            // but materialize the local default instead of the real,
-            // locally-unrecognized payload.
-            b.line(`${g.direction}_proc${calleeIndex}(ctx);`)
-            const localUnion = parentCorr!.localNode!.type as {defaultVariant?: string}
-            emitWriteBack(src, expectAccessor(access, "union", srcNode).finishUnion(localUnion.defaultVariant!, undefined), g, b)
-            return
-        }
-
         const result = `${g.direction}_proc${calleeIndex}(ctx)`
         const temp = `__tmp${g.tempCounter.n++}`
         b.line(`const ${temp} = ${result};`)
@@ -636,7 +839,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
         else if(isNext)
         {
             const listAccess = expectAccessor(access, "list", srcNode)
-            b.line(`${listAccess.appendElement?.(`v${src}`, temp) ?? `v${src}.push(${temp})`};`)
+            emitCountedAppend(src, `${listAccess.appendElement?.(`v${src}`, temp) ?? `v${src}.push(${temp})`};`, g, b)
         }
         else
         {
@@ -665,7 +868,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
         else if(isNext)
         {
             if(access.kind !== "list") throw new Error(`codec-codegen: CALL_CODEC_NEXT's src (slot ${src}) isn't list-kind`)
-            argExpr = access.elementAt(`v${src}`, `${idxCounter(src, g, b)}++`)
+            argExpr = encodedElement(src, `${idxCounter(src, g, b)}++`, g, b)
         }
         else
         {
@@ -693,6 +896,7 @@ export function emitExtStmtIfApplicable(e: Extract<Expr<CodecExtInstr>, {kind: E
         case "OPEN_LIST": emitOpenList(e.src, g, b); return true
         case "CALL_CODEC": emitCallCodec(e.calleeIndex, e.src, e.ref, g, b); return true
         case "CALL_CODEC_NEXT": emitCallCodec(e.calleeIndex, e.src, undefined, g, b); return true
+        case "READ_SEQ": case "WRITE_SEQ": return emitCheckedSeq(e, g, b)
         default: return false
     }
 }
@@ -721,7 +925,11 @@ export function emitReturn(g: GenCtx, b: LineBuilder): void
     // Slot 0 always — a procedure's own entry point.
     const access = localAccessorFor(0, g)
     if(access.kind === "struct") b.line(`return ${access.finishStruct("v0")};`)
-    else if(access.kind === "list") b.line(`return ${access.finishList("v0")};`)
+    else if(access.kind === "list")
+    {
+        if(tracksLength(0, g)) emitLengthClose(g, b)
+        b.line(`return ${access.finishList("v0")};`)
+    }
     else if(access.kind === "unit") b.line(`return ${access.unitValue()};`)
     else b.line("return v0;")
 }

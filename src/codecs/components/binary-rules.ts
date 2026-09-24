@@ -54,11 +54,11 @@ const unitRule = codecRule(pUnit(), (_match, _ctx: void) => ir``)
 
 // ── Lists — length-prefixed ──────────────────────────────────────────────
 
-/** Byte width of a list's count prefix, sized to its declared capacity
- *  (defaulting to a 1-byte prefix, ≤255 elements, when uncapacitated). */
-function countPrefixWidth(capacity: number | undefined): number
+/** Byte width of a list's count prefix, sized to its `maxLength`
+ *  (defaulting to a 1-byte prefix, ≤255 elements, when unbounded). */
+function countPrefixWidth(maxLength: number | undefined): number
 {
-    const cap = capacity ?? 0xFF
+    const cap = maxLength ?? 0xFF
     return cap <= 0xFF ? 1 : cap <= 0xFFFF ? 2 : 4
 }
 
@@ -66,7 +66,7 @@ const listEncodeRule = codecRule(pList(pStar()), (match, _ctx: void, resolve) =>
 ir`
     u32 left = 0;
     left = count(0);
-    write(0, ${countPrefixWidth(match.capacity)}, left);
+    write(0, ${countPrefixWidth(match.maxLength)}, left);
     while (left != 0)
     {
         call_codec_next(${resolve(match.elementType, undefined)}, 0); left = left - 1;
@@ -76,7 +76,7 @@ ir`
 const listDecodeRule = codecRule(pList(pStar()), (match, _ctx: void, resolve) =>
 ir`
     u32 left = 0;
-    left = read(0, ${countPrefixWidth(match.capacity)});
+    left = read(0, ${countPrefixWidth(match.maxLength)});
     open_list(0);
     while (left != 0)
     {
@@ -98,21 +98,21 @@ const listOfIntegerEncodeRule = codecRule(pList(pInteger(-Infinity, Infinity)), 
 ir`
     u32 left = 0;
     left = count(0);
-    write(0, ${countPrefixWidth(match.capacity)}, left);
+    write(0, ${countPrefixWidth(match.maxLength)}, left);
     write_seq(0, 0, ${intWireSize(match.elementMatch)}, left);
 `)
 
 const listOfIntegerDecodeRule = codecRule(pList(pInteger(-Infinity, Infinity)), (match, _ctx: void) =>
 ir`
     u32 left = 0;
-    left = read(0, ${countPrefixWidth(match.capacity)});
+    left = read(0, ${countPrefixWidth(match.maxLength)});
     open_list(0);
     read_seq(0, 0, ${intWireSize(match.elementMatch)}, ${match.elementMatch.min < 0 ? 1 : 0}, left);
 `)
 
 /** Byte width of a standalone union's tag, sized to its actual variant
  *  count (mirrors `countPrefixWidth` above — same reasoning, a discrete
- *  count instead of an optional capacity). A tag is a variant *index*
+ *  count instead of an optional `maxLength`). A tag is a variant *index*
  *  (0..variantCount-1), so it's `variantCount` itself, not `variantCount -
  *  1`, that has to fit the width: exactly 256 variants' worst-case index
  *  (255) still fits one byte. The `> 2**32` branch is unreachable in

@@ -8,7 +8,7 @@
 import {test} from "node:test"
 import * as assert from "node:assert/strict"
 
-import {defaultValueOf, i8, integer, list, named, nameOf, optional, struct, u8, union, unit} from "../../src/core/metamodel"
+import {bytes, defaultValueOf, i8, integer, list, named, nameOf, optional, struct, u8, union, unit} from "../../src/core/metamodel"
 import {buildTypeGraph, child} from "../../src/core/type-graph"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -54,20 +54,20 @@ test("union: no defaultVariant by default", () => {
 })
 
 test("union: defaultVariant naming a unit variant is accepted", () => {
-    const T = union({ok: integer(0, 1), unrecognized: unit}, "unrecognized")
+    const T = union({ok: integer(0, 1), unrecognized: unit}, {defaultVariant: "unrecognized"})
     assert.equal(T.defaultVariant, "unrecognized")
 })
 
 test("union: defaultVariant naming a non-existent variant throws", () => {
-    assert.throws(() => union({ok: integer(0, 1), err: unit}, "missing"))
+    assert.throws(() => union({ok: integer(0, 1), err: unit}, {defaultVariant: "missing"}))
 })
 
 test("union: defaultVariant naming a non-unit variant throws", () => {
-    assert.throws(() => union({ok: integer(0, 1), err: unit}, "ok"))
+    assert.throws(() => union({ok: integer(0, 1), err: unit}, {defaultVariant: "ok"}))
 })
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
-// optional: sugar for union({value: T, empty: unit}, "empty")
+// optional: sugar for union({value: T, empty: unit}, {defaultVariant: "empty"})
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 test("optional: exposes exactly the value/empty variants target rules match on", () => {
@@ -121,7 +121,7 @@ test("defaultValueOf: struct composes its own fields' defaults recursively", () 
 })
 
 test("defaultValueOf: union with a declared defaultVariant", () => {
-    const T = union({temperature: integer(-40, 125), unrecognized: unit}, "unrecognized")
+    const T = union({temperature: integer(-40, 125), unrecognized: unit}, {defaultVariant: "unrecognized"})
     assert.deepEqual(defaultValueOf(T), {variant: "unrecognized", value: undefined})
 })
 
@@ -137,7 +137,7 @@ test("defaultValueOf: struct field of a union type with no default composes to a
 })
 
 test("defaultValueOf: struct field of a union type WITH a default composes cleanly", () => {
-    const WithDefault = union({temperature: integer(-40, 125), unrecognized: unit}, "unrecognized")
+    const WithDefault = union({temperature: integer(-40, 125), unrecognized: unit}, {defaultVariant: "unrecognized"})
     const T = struct({id: integer(0, 255, {default: 0}), kind: WithDefault})
     assert.deepEqual(defaultValueOf(T), {id: 0, kind: {variant: "unrecognized", value: undefined}})
 })
@@ -172,3 +172,32 @@ test("a named thunk (recursive type) carries its name on the thunk itself", () =
     assert.equal(nameOf(child(g.root, {variant: "internal"})!.type), undefined)
     assert.equal(nameOf(child(g.root, {variant: "leaf"})!.type), undefined)
 })
+
+////////////////////////////////////////////////////////////////////////////////////////////////
+// policies and length domains
+////////////////////////////////////////////////////////////////////////////////////////////////
+
+test("integer: an onOutOfDomain replacement must lie in min..max, in either direction", () => {
+    assert.throws(() => integer(0, 10, {onOutOfDomain: {replace: 11}}))
+    assert.throws(() => integer(0, 10, {onOutOfDomain: {encode: {replace: -1}}}))
+    assert.deepEqual(integer(0, 10, {onOutOfDomain: {decode: "saturate"}}).onOutOfDomain, {decode: "saturate"})
+})
+
+test("list: minLength defaults to 0 and maxLength may not be below it", () => {
+    assert.equal(list(u8).minLength, 0)
+    assert.equal("maxLength" in list(u8), false)
+    assert.throws(() => list(u8, {minLength: 5, maxLength: 4}))
+    assert.throws(() => list(u8, {minLength: -1}))
+})
+
+test("bytes(n) is a fixed-length list of u8", () => {
+    const b = bytes(6)
+    assert.deepEqual([b.minLength, b.maxLength, b.elementType], [6, 6, u8])
+})
+
+test("union: an onUnknownVariant replacement must be one of its unit variants", () => {
+    assert.throws(() => union({ok: u8, none: unit}, {onUnknownVariant: {replace: "missing"}}))
+    assert.throws(() => union({ok: u8, none: unit}, {onUnknownVariant: {replace: "ok"}}))
+    assert.deepEqual(union({ok: u8, none: unit}, {onUnknownVariant: {replace: "none"}}).onUnknownVariant, {replace: "none"})
+})
+

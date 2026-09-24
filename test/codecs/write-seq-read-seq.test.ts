@@ -248,7 +248,7 @@ describe("binary-rules.ts: List<Integer> uses write_seq/read_seq, not a per-elem
 
     test("produces the exact same bytes as the generic per-element path would (length prefix + raw little-endian run)", () =>
     {
-        const root = list(u8, {capacity: 8}) // capacity <=255 -> 1-byte length prefix
+        const root = list(u8, {maxLength: 8}) // capacity <=255 -> 1-byte length prefix
         const graph = buildTypeGraph(root)
         const value = [1, 2, 3]
 

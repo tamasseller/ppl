@@ -88,7 +88,7 @@ describe("codec-codegen — alternative representations actually round-trip thro
 
     test("byteListAsUint8ArrayRule: decode produces a real Uint8Array", () =>
     {
-        const T = named("Bytes", list(u8, {capacity: 8}))
+        const T = named("Bytes", list(u8, {maxLength: 8}))
         const { encode, decode } = loadCompiled(T, "Bytes", [byteListAsUint8ArrayRule, ...tsTypeRules])
 
         const decoded = decode(encode(Uint8Array.from([1, 2, 3, 255])))
@@ -123,7 +123,7 @@ describe("codec-codegen — alternative representations actually round-trip thro
         // integer list still gets WRITE_SEQ/READ_SEQ, not call_codec_next
         // — exactly the pairing that needs `bulk.writeSeq`'s own T|null
         // special-casing (see ts-alternative-rules.ts's own comment on it).
-        const T = named("MaybeByte", list(integer(0, 255), {capacity: 1}))
+        const T = named("MaybeByte", list(integer(0, 255), {maxLength: 1}))
         const { encode, decode } = loadCompiled(T, "MaybeByte", [capacityOneListAsOptionalRule, ...tsTypeRules])
 
         assert.equal(decode(encode(42)), 42)
@@ -143,7 +143,7 @@ describe("codec-codegen — alternative representations actually round-trip thro
                 // no bulk — the point of this test.
             }))
 
-        const T = named("Samples", list(integer(0, 255), {capacity: 4}))
+        const T = named("Samples", list(integer(0, 255), {maxLength: 4}))
         assert.throws(
             () => loadCompiled(T, "Samples", [noBulkListRule, ...tsTypeRules]),
             /no bulk sequential-transfer support/,
@@ -206,7 +206,7 @@ describe("codec-codegen — alternative representations actually round-trip thro
                     `(${acc}.some((x: any) => JSON.stringify(x) === JSON.stringify(${v})) ? (() => { throw new Error("duplicate element") })() : ${acc}.push(${v}))`,
             }))
 
-        const T = named("Bag", list(struct({ v: integer(0, 255) }), {capacity: 4}))
+        const T = named("Bag", list(struct({ v: integer(0, 255) }), {maxLength: 4}))
         const { encode, decode } = loadCompiled(T, "Bag", [noDuplicatesListRule, ...tsTypeRules])
 
         assert.deepEqual(decode(encode([{ v: 1 }, { v: 2 }, { v: 3 }])), [{ v: 1 }, { v: 2 }, { v: 3 }])
@@ -222,7 +222,7 @@ describe("codec-codegen — alternative representations actually round-trip thro
         // samples to offset 2, so the zero-copy path actually succeeds
         // here — this is the schema-layout concern int16ListAsInt16ArrayRule's
         // own doc comment describes, not an accident of this test.
-        const T = named("Padded", struct({ pad: integer(0, 255), samples: list(integer(-32768, 32767), {capacity: 4}) }))
+        const T = named("Padded", struct({ pad: integer(0, 255), samples: list(integer(-32768, 32767), {maxLength: 4}) }))
         const { encode, decode } = loadCompiled(T, "Padded", [int16ListAsInt16ArrayRule, ...tsTypeRules])
 
         const bytes = encode({ pad: 7, samples: Int16Array.from([1000, -1000, 32767, -32768]) })
@@ -236,7 +236,7 @@ describe("codec-codegen — alternative representations actually round-trip thro
     {
         // No padding this time — the 1-byte count prefix lands the sample
         // data at offset 1, which Int16Array's own constructor rejects.
-        const T = named("Samples", list(integer(-32768, 32767), {capacity: 4}))
+        const T = named("Samples", list(integer(-32768, 32767), {maxLength: 4}))
         const { encode, decode } = loadCompiled(T, "Samples", [int16ListAsInt16ArrayRule, ...tsTypeRules])
 
         const bytes = encode(Int16Array.from([1000, -1000, 32767, -32768]))
@@ -256,7 +256,7 @@ describe("codec-codegen — alternative representations actually round-trip thro
         // so this exercises both that feature and this rule's own
         // fallback path together, in place of the hand-rolled substitute
         // rule pair this test used before CALL support existed.
-        const T = named("Samples", list(integer(-32768, 32767), {capacity: 8}))
+        const T = named("Samples", list(integer(-32768, 32767), {maxLength: 8}))
         const encodeProgram = buildCodec(T, [deltaLeb128EncodeRule], undefined)
         const decodeProgram = buildCodec(T, [deltaLeb128DecodeRule], undefined)
         const source = generateCodecModule({ name: "Samples", rootType: T, encodeProgram, decodeProgram, rules: [int16ListAsInt16ArrayRule, ...tsTypeRules] })

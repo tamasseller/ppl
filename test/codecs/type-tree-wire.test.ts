@@ -13,7 +13,7 @@ import assert from "node:assert/strict"
 
 import type { IntegerType, SemanticType, StructType } from "../../src/core/index"
 import {
-    SemanticTypeKinds, derefType, i16, i32, i8, integer, list, struct, u16, u32, u8, union, unit,
+    SemanticTypeKinds, bytes as fixedBytes, derefType, i16, i32, i8, integer, list, struct, u16, u32, u8, union, unit,
 } from "../../src/core/index"
 
 import { decodeTypeTree, encodeTypeTree } from "../../src/codecs/engine/type-tree-wire"
@@ -34,7 +34,7 @@ function sameShape(a: SemanticType, b: SemanticType): void
         case SemanticTypeKinds.List:
         {
             const bl = tb as typeof ta
-            assert.equal(ta.capacity, bl.capacity)
+            assert.deepEqual([ta.minLength, ta.maxLength], [bl.minLength, bl.maxLength])
             sameShape(ta.elementType, bl.elementType)
             break
         }
@@ -153,16 +153,18 @@ describe("type tree wire — leaves", () =>
 
 describe("type tree wire — list", () =>
 {
-    test("uncapacitated list costs one tag byte, no operand", () =>
+    test("an unbounded list from 0 costs one tag byte, no operand", () =>
     {
         const { bytes } = roundTrip(list(u8))
         assert.deepEqual([...bytes], [0, 0xC1, 0xCB, 0xD0])
     })
 
-    test("capacitated list carries its capacity", () =>
+    test("each list bound form carries exactly its operands", () =>
     {
-        const { decoded } = roundTrip(list(u8, {capacity: 16}))
-        assert.equal((derefType(decoded) as { capacity?: number }).capacity, 16)
+        assert.deepEqual([...roundTrip(list(u8, {maxLength: 16})).bytes], [0, 0xC1, 0xCC, 16, 0xD0])
+        assert.deepEqual([...roundTrip(fixedBytes(6)).bytes], [0, 0xC1, 0xD2, 6, 0xD0])
+        assert.deepEqual([...roundTrip(list(u8, {minLength: 2, maxLength: 9})).bytes], [0, 0xC1, 0xD3, 2, 9, 0xD0])
+        assert.deepEqual([...roundTrip(list(u8, {minLength: 3})).bytes], [0, 0xC1, 0xD4, 3, 0xD0])
     })
 })
 
@@ -196,7 +198,7 @@ describe("type tree wire — struct / union, compact form", () =>
 
     test("union with a declared default variant round-trips it", () =>
     {
-        const t = union({ temperature: i16, unrecognized: unit }, "unrecognized")
+        const t = union({ temperature: i16, unrecognized: unit }, {defaultVariant: "unrecognized"})
         const { decoded } = roundTrip(t)
         assert.equal((derefType(decoded) as { defaultVariant?: string }).defaultVariant, "unrecognized")
     })
@@ -314,7 +316,7 @@ describe("type tree wire — a realistic schema", () =>
         const TelemetryPacket = struct({
             deviceId: integer(0, 0xFFFFFFFF),
             timestamp: Timestamp,
-            readings: list(SensorReading, {capacity: 16}),
+            readings: list(SensorReading, {maxLength: 16}),
             status: integer(0, 0xFFFF),
         })
         roundTrip(TelemetryPacket)

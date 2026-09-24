@@ -146,6 +146,22 @@ const edgesOf = (t: ConcreteSemanticType, build: (t: SemanticType) => TypeNode):
 }
 
 /** Find a child by step. Returns undefined if no edge matches. */
+/** For error messages: the first position, depth-first in declaration order,
+ *  reaching each node — `Root.field`, `Root.variant`, `Root.list[]`. */
+export function firstPaths(graph: TypeGraph, rootName: string): Map<number, string>
+{
+    const paths = new Map<number, string>()
+    const visit = (node: TypeNode, path: string): void =>
+    {
+        if(paths.has(node.id)) return
+        paths.set(node.id, path)
+        for(const e of node.edges)
+            visit(e.target, "element" in e.step ? `${path}[]` : `${path}.${"field" in e.step ? e.step.field : e.step.variant}`)
+    }
+    visit(graph.root, rootName)
+    return paths
+}
+
 export function child(node: TypeNode, step: Step): TypeNode | undefined
 {
     return node.edges.find(e => stepEquals(e.step, step))?.target

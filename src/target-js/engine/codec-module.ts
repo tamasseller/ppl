@@ -30,7 +30,7 @@
 import type {RtlProgram, RaisedProc} from "mog-core"
 import {raiseProgram} from "mog-core"
 import type {SemanticType, TypeGraph, TypeNode} from "../../core/index"
-import {buildTypeGraph} from "../../core/index"
+import {buildTypeGraph, firstPaths, nameOf} from "../../core/index"
 import type {Direction, CodecExtInstr} from "../../codecs/index"
 import {resolveHandleTypes, CODEC_EFFECTS} from "../../codecs/index"
 import type {TsRule, TSTypeDecl} from "./resolver"
@@ -74,12 +74,16 @@ function procedureBoundaryTypes(program: RtlProgram<CodecExtInstr>, graph: TypeG
  *  local representation, direction-independent. */
 function generateProcedures(
     program: RtlProgram<CodecExtInstr>, entryTypes: ReadonlyMap<number, TypeNode>, direction: Direction,
-    projection: ReadonlyMap<number, TSTypeDecl>,
+    projection: ReadonlyMap<number, TSTypeDecl>, paths: ReadonlyMap<number, string>,
 ): string
 {
     const raisedProcs: readonly RaisedProc<CodecExtInstr>[] = raiseProgram(program, {effects: CODEC_EFFECTS})
     return raisedProcs
-        .map((raised, i) => generateProcedure(i, raised, entryTypes.get(i), direction, projection))
+        .map((raised, i) =>
+        {
+            const entry = entryTypes.get(i)
+            return generateProcedure(i, raised, entry, direction, projection, undefined, entry && paths.get(entry.id))
+        })
         .join("\n\n")
 }
 
@@ -108,7 +112,7 @@ export interface CodecModuleOptions
  *  anywhere in this repo's tsconfigs). */
 export const RUNTIME_IMPORTS = [
     "read", "write", "hasNext", "cloneRd", "cloneWr", "seek", "pushForks", "popForks", "writeSeq", "readSeq", "readSeqView", "writeSeqRaw",
-    "tagOf", "signExtend", "revBits", "CodecTrap",
+    "tagOf", "signExtend", "revBits", "CodecTrap", "inDomain", "saturate", "orReplace",
 ] as const
 
 /**
@@ -144,15 +148,16 @@ export function generateCodecModule(opts: CodecModuleOptions): string
     const extraRoots = [...encodeEntryTypes.values(), ...decodeEntryTypes.values()].map(node => node.source as SemanticType)
 
     const typeResult = projectTSTypes(rootType, rules, extraRoots, graph)
+    const paths = firstPaths(graph, nameOf(rootType) ?? "root")
     const valueType = typeResult.get(graph.root.id)?.ref ?? "unknown"
 
     return `import { ${RUNTIME_IMPORTS.join(", ")} } from "ppl"
 import type { Ctx } from "ppl"
 
 ${emitTSDeclarations(typeResult)}
-${generateProcedures(encodeProgram, encodeEntryTypes, "encode", typeResult)}
+${generateProcedures(encodeProgram, encodeEntryTypes, "encode", typeResult, paths)}
 
-${generateProcedures(decodeProgram, decodeEntryTypes, "decode", typeResult)}
+${generateProcedures(decodeProgram, decodeEntryTypes, "decode", typeResult, paths)}
 
 export function encode${name}(value: ${valueType}): Uint8Array {
     const ctx: Ctx = { buffer: new Uint8Array(64), length: 0, iters: [{ pos: 0, capability: "write", overwriteOnly: false }] }

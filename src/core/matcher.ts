@@ -43,7 +43,9 @@ export interface ListPattern<E extends TypePattern = TypePattern>
 {
     kind: SemanticTypeKinds.List
     elementPattern: E
-    capacityMax?: number
+    /** Containment: a list matches iff its length domain lies inside these bounds. */
+    minLength?: number
+    maxLength?: number
 }
 
 export const isListPattern = (P: TypePattern): P is ListPattern => P.kind === SemanticTypeKinds.List
@@ -55,12 +57,15 @@ export interface ListMatch<E extends TypeMatch = TypeMatch>
      *  by identity, e.g. by a codec resolver, without needing a TypeNode. */
     elementType: SemanticType
     elementMatch: E
-    capacity?: number
+    minLength: number
+    maxLength?: number
 }
 
 export const matchList = <P extends ListPattern>(T: ListType, P: P): MatchOf<P> | undefined =>
 {
-    if(P.capacityMax === undefined || T.capacity !== undefined && T.capacity <= P.capacityMax)
+    const minFits = P.minLength === undefined || P.minLength <= T.minLength
+    const maxFits = P.maxLength === undefined || T.maxLength !== undefined && T.maxLength <= P.maxLength
+    if(minFits && maxFits)
     {
         const e = matchType(T.elementType, P.elementPattern);
         if(e !== undefined)
@@ -69,7 +74,8 @@ export const matchList = <P extends ListPattern>(T: ListType, P: P): MatchOf<P> 
                 kind: SemanticTypeKinds.List,
                 elementType: T.elementType,
                 elementMatch: e,
-                capacity: T.capacity
+                minLength: T.minLength,
+                maxLength: T.maxLength
             } as MatchOf<P>
         }
     }
@@ -436,10 +442,10 @@ export const pUnit = (): UnitPattern => ({kind: SemanticTypeKinds.Unit})
 
 export const pInteger = (min: number, max: number): IntegerPattern => ({kind: SemanticTypeKinds.Integer, min, max})
 
-export const pList = <E extends TypePattern>(elementPattern: E, capacityMax?: number): ListPattern<E> => ({
+export const pList = <E extends TypePattern>(elementPattern: E, bounds: {minLength?: number; maxLength?: number} = {}): ListPattern<E> => ({
     kind: SemanticTypeKinds.List,
     elementPattern,
-    capacityMax,
+    ...bounds,
 })
 
 export const pStruct = <F extends {[name: string]: TypePattern}>(fieldPatterns: F): StructPattern<F> => ({

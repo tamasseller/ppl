@@ -50,8 +50,8 @@
  */
 
 import type { TypeNode } from "./type-graph"
-import { SemanticTypeKinds, defaultValueOf, nameOf } from "./metamodel"
-import type { IntegerType, SemanticType, UnionType } from "./metamodel"
+import { SemanticTypeKinds, defaultValueOf, nameOf, policyHalves } from "./metamodel"
+import type { IntegerType, ListType, SemanticType, UnionType, Policy, OutOfDomainPolicy, UnknownVariantPolicy } from "./metamodel"
 
 /** Which of the two ends of a codec a piece of generated/interpreted code
  *  is playing — encoding a local value onto the wire, or decoding wire
@@ -217,16 +217,25 @@ export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Corresponde
 }
 
 export type Resolution =
-    | { readonly action: "bridge" }
+    | { readonly action: "bridge"; readonly checks?: readonly Check[] }
     | { readonly action: "drop" }
     | { readonly action: "default"; readonly value: unknown }
-    | { readonly action: "trap"; readonly reason: string }
-    /** §4.5's table: a combination no rule is needed for, because the
-     *  union's own selection mechanism (the local value's active variant
-     *  on encode; the wire tag on decode) already rules it out
-     *  structurally — not a gap, a codegen literally never needs to emit
-     *  anything for this edge under this direction. */
+    /** §4.5's table: a combination the union's own selection mechanism
+     *  rules out. The instruction still exists, so it compiles to a throw. */
     | { readonly action: "unreachable" }
+
+/** A per-value check a bridged edge needs, and the consumer's policy for
+ *  a value that fails it (docs/reconciliation.md §2.5, §4.8). */
+export type Check =
+    | { readonly cause: "out-of-domain"; readonly domain: readonly [number, number]; readonly policy: OutOfDomainPolicy }
+    | { readonly cause: "unknown-variant"; readonly policy: UnknownVariantPolicy }
+    | { readonly cause: "over-length"; readonly maxLength: number; readonly policy: "trap" | "truncate" }
+    | { readonly cause: "under-length"; readonly minLength: number; readonly policy: "trap" | "pad" }
+
+export function policyFor<P>(p: Policy<P> | undefined, direction: Direction): P | undefined
+{
+    return policyHalves(p)[direction]
+}
 
 /**
  * Apply §4.4/§4.5's rules to one edge of `parent`'s children, for one
@@ -235,17 +244,10 @@ export type Resolution =
  * direction a codegen is generating for, and once per edge it needs a
  * decision for (never recursively — see below).
  *
- * `parent` must itself be `"matched"` — the precondition that makes
- * `parent.imageNode`/`parent.localNode` (both needed to read `parent`'s
- * own kind, and, for a variant, its *local* declared default variant)
- * safe to dereference unconditionally. This isn't a limitation: once an
- * edge resolves to anything other than `"bridge"`, that resolution
- * (`drop`/`default`/`trap`/`unreachable`) already fully describes what to
- * do with *that entire edge*, including whatever is nested inside it —
- * dropping a struct field write is unconditionally safe regardless of
- * what the field's own type contains (§4.4), so a caller never needs to
- * recurse into a non-matched edge's own children at all. Every real call
- * site is therefore "resolve one child of an edge I already bridged into."
+ * `parent` must itself be `"matched"`: once an edge resolves to anything
+ * other than `"bridge"`, that resolution already describes the whole edge,
+ * including whatever is nested inside it, so a caller never recurses into
+ * a non-matched edge's own children.
  */
 export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direction: Direction): Resolution
 {
@@ -259,30 +261,11 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
 
     if(parentKind === SemanticTypeKinds.Union)
     {
-        if(c.outcome === "image-only")
-        {
-            // §4.5 — decode: an unrecognized tag arrived. On encode this
-            // variant can never be the value being encoded at all (§4.5).
-            if(direction === "encode") return { action: "unreachable" }
-            const localUnion = parent.localNode!.type as UnionType
-            if(localUnion.defaultVariant === undefined)
-            {
-                return {
-                    action: "trap",
-                    reason: `variant "${edge.name}" isn't recognized locally and the local union declares no default variant`,
-                }
-            }
-            return { action: "default", value: defaultValueOf(parent.localNode!.type, parent.path) }
-        }
-
-        // local-only. §4.5 — encode: the local value genuinely is this
-        // variant; no wire representation exists for it. On decode this
-        // variant can never be selected by an incoming tag at all (§4.5).
-        if(direction === "decode") return { action: "unreachable" }
-        return {
-            action: "trap",
-            reason: `variant "${edge.name}" has no counterpart in the image type — no wire representation exists for it`,
-        }
+        // §4.5: an image-only variant only arrives on decode, a local-only
+        // one is only ever encoded; the other two cells are unreachable.
+        const reachable = c.outcome === "image-only" ? direction === "decode" : direction === "encode"
+        if(!reachable) return { action: "unreachable" }
+        return { action: "bridge", checks: [{ cause: "unknown-variant", policy: unknownVariantPolicy(parent, direction) }] }
     }
 
     // A struct field (parentKind === Struct; a List's "element" edge is
@@ -300,4 +283,89 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
     // field's container; seed it from the local declared default. §4.4
     // (encode, additive): drop — unconditionally safe, the mirror of image-only/decode.
     return direction === "decode" ? { action: "default", value: defaultValueOf(c.localNode!.type, c.path) } : { action: "drop" }
+}
+
+/**
+ * Classify one matched leaf-like position for one direction (§4.3): an
+ * integer's range, a list's length, a union's variant set. `total` is a
+ * bare `bridge`; `partial` carries the checks and the consumer's policies;
+ * `empty`, or a partial edge with no policy for its cause, throws — a build
+ * error, never a runtime trap. Needs no parent, so any slot can call it.
+ */
+export function classify(c: Correspondence, direction: Direction): Resolution
+{
+    if(c.outcome !== "matched")
+        throw new Error(`classify: ${c.path} is ${c.outcome}, not matched`)
+
+    const image = c.imageNode!.type
+    const local = c.localNode!.type
+    switch(image.kind)
+    {
+        case SemanticTypeKinds.Integer: return classifyInteger(c, image, local as IntegerType, direction)
+        case SemanticTypeKinds.List: return classifyList(c, image, local as ListType, direction)
+        case SemanticTypeKinds.Union:
+        {
+            const extra = (c.children ?? []).some(e => e.correspondence.outcome === (direction === "decode" ? "image-only" : "local-only"))
+            return extra ? { action: "bridge", checks: [{ cause: "unknown-variant", policy: unknownVariantPolicy(c, direction) }] } : { action: "bridge" }
+        }
+        default: return { action: "bridge" }
+    }
+}
+
+function classifyInteger(c: Correspondence, image: IntegerType, local: IntegerType, direction: Direction): Resolution
+{
+    const [src, dst] = direction === "decode" ? [image, local] : [local, image]
+    if(dst.min <= src.min && src.max <= dst.max) return { action: "bridge" }
+    if(src.max < dst.min || dst.max < src.min)
+        throw new Error(`reconcile: no value fits both sides at ${c.path} — image is ${image.min}..${image.max}, local is ${local.min}..${local.max}`)
+
+    const policy = policyFor(local.onOutOfDomain, direction)
+    if(policy === undefined)
+        throw new Error(`reconcile: ${direction} at ${c.path} can see values outside ${dst.min}..${dst.max} and the local integer declares no onOutOfDomain for it`)
+    if(typeof policy === "object" && (policy.replace < dst.min || dst.max < policy.replace))
+        throw new Error(`reconcile: onOutOfDomain replacement ${policy.replace} at ${c.path} is outside the image's ${dst.min}..${dst.max}`)
+
+    return { action: "bridge", checks: [{ cause: "out-of-domain", domain: [dst.min, dst.max], policy }] }
+}
+
+function classifyList(c: Correspondence, image: ListType, local: ListType, direction: Direction): Resolution
+{
+    const [src, dst] = direction === "decode" ? [image, local] : [local, image]
+    const bounds = (l: ListType): string => `${l.minLength}..${l.maxLength ?? ""}`
+    if((src.maxLength !== undefined && src.maxLength < dst.minLength) || (dst.maxLength !== undefined && dst.maxLength < src.minLength))
+        throw new Error(`reconcile: no length fits both sides at ${c.path} — image is ${bounds(image)}, local is ${bounds(local)}`)
+
+    const policy = policyFor(local.onLength, direction) ?? {}
+    const checks: Check[] = []
+
+    if(dst.maxLength !== undefined && (src.maxLength === undefined || dst.maxLength < src.maxLength))
+    {
+        if(policy.over === undefined)
+            throw new Error(`reconcile: ${direction} at ${c.path} can see more than ${dst.maxLength} elements and the local list declares no onLength.over for it`)
+        checks.push({ cause: "over-length", maxLength: dst.maxLength, policy: policy.over })
+    }
+
+    if(src.minLength < dst.minLength)
+    {
+        if(policy.under === undefined)
+            throw new Error(`reconcile: ${direction} at ${c.path} can see fewer than ${dst.minLength} elements and the local list declares no onLength.under for it`)
+        if(policy.under === "pad") defaultValueOf(local.elementType, `${c.path}[]`)
+        checks.push({ cause: "under-length", minLength: dst.minLength, policy: policy.under })
+    }
+
+    return checks.length === 0 ? { action: "bridge" } : { action: "bridge", checks }
+}
+
+function unknownVariantPolicy(c: Correspondence, direction: Direction): UnknownVariantPolicy
+{
+    const policy = policyFor((c.localNode!.type as UnionType).onUnknownVariant, direction)
+    if(policy === undefined)
+        throw new Error(`reconcile: ${direction} at ${c.path} can see a variant the other side lacks and the local union declares no onUnknownVariant for it`)
+    if(typeof policy === "object")
+    {
+        const counterpart = (c.children ?? []).find(e => e.name === policy.replace)?.correspondence
+        if(counterpart?.outcome !== "matched")
+            throw new Error(`reconcile: onUnknownVariant replacement "${policy.replace}" at ${c.path} is not a variant of both sides`)
+    }
+    return policy
 }

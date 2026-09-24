@@ -119,14 +119,17 @@ per-node recurrence to exploit here, so a byte per tag is already at floor.
 | `0xC8` | `PUSH_INT_MIN0_DEF_EXT` | max, default (zigzag-LEB128); `min = 0` |
 | `0xC9` | `PUSH_INT_EXT` | min, max (zigzag-LEB128); no default |
 | `0xCA` | `PUSH_INT_DEF_EXT` | min, max, default: the fully general case |
-| `0xCB` | `LIST` | none (uncapacitated) |
-| `0xCC` | `LIST_EXT` | capacity: LEB128 |
+| `0xCB` | `LIST` | none; `minLength = 0`, unbounded |
+| `0xCC` | `LIST_MAX_EXT` | maxLength: LEB128; `minLength = 0` |
 | `0xCD` | `STRUCT_EXT` | fieldCount: LEB128, then a name specification (§3.3) |
 | `0xCE` | `UNION_EXT` | variantCount: LEB128, name specification, defaultIndex |
 | `0xCF` | `PUSH_REF_EXT` | delta: LEB128 |
 | `0xD0` | `END` | none; pop the one remaining value (which must be the only one left) as the root type, section over |
 | `0xD1` | `MEANING` | string-table index: LEB128; pops an integer, pushes it with that `meaning` |
-| `0xD2`-`0xFF` | reserved | |
+| `0xD2` | `LIST_FIXED_EXT` | length: LEB128; `minLength = maxLength` |
+| `0xD3` | `LIST_RANGE_EXT` | minLength, maxLength: LEB128 |
+| `0xD4` | `LIST_MIN_EXT` | minLength: LEB128; unbounded |
+| `0xD5`-`0xFF` | reserved | |
 
 Four integer forms rather than one general form: no default is the common
 case (reconciliation.md §2.4: only a field added after its peers declares
@@ -151,7 +154,7 @@ encode(node):
         integer: emit canonical PUSH_* if no default, else whichever
                  PUSH_INT_*EXT fits (min=0? default? both? neither?);
                  then MEANING(idx) if it has a meaning
-        list:    encode(elementType); emit LIST or LIST_EXT(capacity)
+        list:    encode(elementType); emit whichever LIST form fits its bounds
         struct:  for each field:   encode(child)
                  emit STRUCT(N, nameSpec) or, if N ≥ 64,
                       STRUCT_EXT(N, nameSpec)
@@ -234,7 +237,7 @@ one; `PUSH_REF`/`PUSH_REF_EXT` look up `table[nextIndex - delta]` and push a
 copy without adding a new entry.
 
 Discovery keys on a structural *signature*, a pure function of shape (kind,
-range, default, meaning, field/variant names, recursively) computed before deciding whether to
+range, default, meaning, length bounds, field/variant names, recursively) computed before deciding whether to
 recurse into children. Keying on the emitted bytes instead never matches a
 repeated composite's second occurrence: its children resolve to short
 backrefs the first occurrence's construction bytes lack, so two occurrences

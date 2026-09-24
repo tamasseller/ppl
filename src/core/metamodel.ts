@@ -18,6 +18,22 @@ export type ConcreteSemanticType = UnitType | IntegerType | StructType | UnionTy
 
 export type SemanticField = {name: string; type: SemanticType}
 
+/** One policy for both directions, or one per direction (docs/reconciliation.md §2.5). */
+export type Policy<P> = P | {readonly decode?: P; readonly encode?: P}
+
+export type OutOfDomainPolicy = "trap" | "saturate" | {readonly replace: number}
+export type LengthPolicy = {readonly over?: "trap" | "truncate"; readonly under?: "trap" | "pad"}
+export type UnknownVariantPolicy = "trap" | {readonly replace: string}
+
+/** Both halves of a `Policy`, whichever form it was written in. */
+export function policyHalves<P>(p: Policy<P> | undefined): {decode?: P; encode?: P}
+{
+    if(p === undefined) return {}
+    if(typeof p === "object" && p !== null && ("decode" in p || "encode" in p))
+        return p as {decode?: P; encode?: P}
+    return {decode: p as P, encode: p as P}
+}
+
 export interface UnitType {kind: SemanticTypeKinds.Unit}
 export const unit: UnitType = {kind: SemanticTypeKinds.Unit}
 
@@ -32,13 +48,17 @@ export interface IntegerType
     /** Namespaced, e.g. `si:voltage`. Compatibility is equality where both
      *  sides declare one (docs/reconciliation.md §2.1). */
     meaning?: string
+    onOutOfDomain?: Policy<OutOfDomainPolicy>
 }
 
 export interface ListType
 {
     kind: SemanticTypeKinds.List
     elementType: SemanticType
-    capacity?: number
+    minLength: number
+    /** Absent: unbounded. */
+    maxLength?: number
+    onLength?: Policy<LengthPolicy>
 }
 
 export interface StructType
@@ -51,13 +71,10 @@ export interface UnionType
 {
     kind: SemanticTypeKinds.Union
     variants: Map<string, SemanticType>
-    /** Name of the variant `defaultValueOf` (and a decoder reconciling
-     *  against a narrower image tree, docs/reconciliation.md §4.5) falls
-     *  back to. Opt-in and restricted to a `unit`-valued variant (so it
-     *  never needs a payload of its own) — a union with no natural
-     *  fallback (e.g. an instruction-opcode-style enum) simply doesn't
-     *  declare one, and defaultValueOf/reconciliation trap instead. */
+    /** The absent default (docs/reconciliation.md §2.4). Opt-in and
+     *  restricted to a `unit`-valued variant, so it never needs a payload. */
     defaultVariant?: string
+    onUnknownVariant?: Policy<UnknownVariantPolicy>
 }
 
 export const kindOf = (t: SemanticType): SemanticTypeKinds | "reference" => typeof t === "function" ? "reference" : t.kind
@@ -86,6 +103,7 @@ export interface IntegerOptions
 {
     readonly default?: number
     readonly meaning?: string
+    readonly onOutOfDomain?: Policy<OutOfDomainPolicy>
 }
 
 export const integer = (min: number, max: number, opts: IntegerOptions = {}): IntegerType =>
@@ -94,9 +112,13 @@ export const integer = (min: number, max: number, opts: IntegerOptions = {}): In
         throw new Error(`integer: default ${opts.default} is outside ${min}..${max}`)
     if(opts.meaning !== undefined && !/^[^\s:]+:\S+$/.test(opts.meaning))
         throw new Error(`integer: meaning "${opts.meaning}" is not namespaced, e.g. "si:voltage"`)
+    for(const half of Object.values(policyHalves(opts.onOutOfDomain)))
+        if(typeof half === "object" && (half.replace < min || max < half.replace))
+            throw new Error(`integer: onOutOfDomain replacement ${half.replace} is outside ${min}..${max}`)
     return {
         kind: SemanticTypeKinds.Integer, min, max, default: opts.default,
         ...(opts.meaning !== undefined && {meaning: opts.meaning}),
+        ...(opts.onOutOfDomain !== undefined && {onOutOfDomain: opts.onOutOfDomain}),
     }
 }
 
@@ -119,11 +141,27 @@ export const u32 = unsignedInteger(32)
 
 export interface ListOptions
 {
-    readonly capacity?: number
+    readonly minLength?: number
+    readonly maxLength?: number
+    readonly onLength?: Policy<LengthPolicy>
 }
 
 export const list = (T: SemanticType, opts: ListOptions = {}): ListType =>
-    ({kind: SemanticTypeKinds.List, elementType: T, capacity: opts.capacity})
+{
+    const minLength = opts.minLength ?? 0
+    if(!Number.isInteger(minLength) || minLength < 0)
+        throw new Error(`list: minLength ${minLength} is not a non-negative integer`)
+    if(opts.maxLength !== undefined && (!Number.isInteger(opts.maxLength) || opts.maxLength < minLength))
+        throw new Error(`list: maxLength ${opts.maxLength} is below minLength ${minLength}`)
+    return {
+        kind: SemanticTypeKinds.List, elementType: T, minLength,
+        ...(opts.maxLength !== undefined && {maxLength: opts.maxLength}),
+        ...(opts.onLength !== undefined && {onLength: opts.onLength}),
+    }
+}
+
+/** Fixed-length bytes, e.g. `bytes(6)` for a MAC address. */
+export const bytes = (n: number): ListType => list(u8, {minLength: n, maxLength: n})
 
 export const struct = (def: {[k: string]: SemanticType}): StructType =>
 ({
@@ -131,36 +169,46 @@ export const struct = (def: {[k: string]: SemanticType}): StructType =>
     fields: new Map(Object.entries(def))
 })
 
-export const union = (def: {[k: string]: SemanticType}, defaultVariant?: string): UnionType =>
+export interface UnionOptions
 {
-    if(defaultVariant !== undefined)
+    readonly defaultVariant?: string
+    readonly onUnknownVariant?: Policy<UnknownVariantPolicy>
+}
+
+export const union = (def: {[k: string]: SemanticType}, opts: UnionOptions = {}): UnionType =>
+{
+    const requireUnitVariant = (name: string, what: string): void =>
     {
-        const variantType = def[defaultVariant]
+        const variantType = def[name]
         if(variantType === undefined)
-            throw new Error(`union: defaultVariant "${defaultVariant}" is not a variant of this union`)
+            throw new Error(`union: ${what} "${name}" is not a variant of this union`)
         if(!isUnit(variantType))
-            throw new Error(`union: defaultVariant "${defaultVariant}" must be unit-valued`)
+            throw new Error(`union: ${what} "${name}" must be unit-valued`)
     }
+
+    if(opts.defaultVariant !== undefined) requireUnitVariant(opts.defaultVariant, "defaultVariant")
+    for(const half of Object.values(policyHalves(opts.onUnknownVariant)))
+        if(typeof half === "object") requireUnitVariant(half.replace, "onUnknownVariant replacement")
 
     return {
         kind: SemanticTypeKinds.Union,
         variants: new Map(Object.entries(def)),
-        defaultVariant
+        defaultVariant: opts.defaultVariant,
+        ...(opts.onUnknownVariant !== undefined && {onUnknownVariant: opts.onUnknownVariant}),
     }
 }
 
 /**
  * An optional value: sugar for the 2-variant `union({value: T, empty:
- * unit}, "empty")` shape target/codec rules already recognize by exact
+ * unit}, {defaultVariant: "empty"})` shape target/codec rules already recognize by exact
  * name (e.g. a C++ target's `std::optional<T>` rule,
  * `target-js`'s `T | null` rule) — one blessed constructor instead of each
  * schema author hand-rolling a union and hoping they used the same two
  * variant names those rules match on. `"empty"` is the declared
- * `defaultVariant` for free, so a decoder reconciling against a narrower
- * image tree (docs/reconciliation.md §4.5) falls back to "absent" without the
- * schema author declaring anything extra.
+ * `defaultVariant` for free, so a field of this type added on one side
+ * defaults to absent on the other (docs/reconciliation.md §2.4).
  */
-export const optional = (T: SemanticType): UnionType => union({value: T, empty: unit}, "empty")
+export const optional = (T: SemanticType): UnionType => union({value: T, empty: unit}, {defaultVariant: "empty"})
 
 /**
  * The value a decoder/encoder substitutes when a field/variant has no

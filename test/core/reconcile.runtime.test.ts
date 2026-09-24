@@ -14,10 +14,11 @@ import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
 import type { TypeNode } from "../../src/core/type-graph"
+import type { SemanticType } from "../../src/core/metamodel"
 import { buildTypeGraph } from "../../src/core/type-graph"
-import { struct, union, unit, u8, u16, integer, list, named, defaultValueOf } from "../../src/core/metamodel"
+import { struct, union, unit, u8, u16, integer, list, named, defaultValueOf, bytes } from "../../src/core/metamodel"
 
-import { reconcile, resolve } from "../../src/core/reconcile"
+import { reconcile, resolve, classify } from "../../src/core/reconcile"
 import type { Correspondence, CorrespondenceEdge } from "../../src/core/reconcile"
 
 const root = (t: Parameters<typeof buildTypeGraph>[0]): TypeNode => buildTypeGraph(t).root
@@ -278,58 +279,134 @@ describe("resolve(): struct field — all four cells are real (§4.4 table)", ()
 
 describe("resolve(): union variant — only two of four cells are reachable (§4.5 table)", () =>
 {
-    test("image-only variant, decode, local declares a default variant → default (§4.5)", () =>
-    {
-        const image = root(struct({ tag: union({ known: unit, extra: unit }) }))
-        const local = root(struct({ tag: union({ known: unit, unrecognized: unit }, "unrecognized") }))
-        const tag = edgeOf(reconcile(image, local), "tag").correspondence
+    const tagOf = (image: SemanticType, local: SemanticType): Correspondence =>
+        edgeOf(reconcile(root(struct({ tag: image })), root(struct({ tag: local }))), "tag").correspondence
 
+    test("image-only variant, decode → the local onUnknownVariant, as a check", () =>
+    {
+        const tag = tagOf(union({ known: unit, extra: unit }), union({ known: unit }, { onUnknownVariant: { replace: "known" } }))
         assert.equal(edgeOf(tag, "extra").correspondence.outcome, "image-only")
-        assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "decode"), { action: "default", value: defaultValueOf(tag.localNode!.type) })
+        assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "decode"),
+            { action: "bridge", checks: [{ cause: "unknown-variant", policy: { replace: "known" } }] })
     })
 
-    test("image-only variant, decode, local declares NO default variant → trap (§4.5)", () =>
+    test("image-only variant, decode, trap policy → a trap check", () =>
     {
-        const image = root(struct({ tag: union({ known: unit, extra: unit }) }))
-        const local = root(struct({ tag: union({ known: unit }) }))
-        const tag = edgeOf(reconcile(image, local), "tag").correspondence
-
-        const r = resolve(tag, edgeOf(tag, "extra"), "decode")
-        assert.equal(r.action, "trap")
+        const tag = tagOf(union({ known: unit, extra: unit }), union({ known: unit }, { onUnknownVariant: "trap" }))
+        assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "decode"),
+            { action: "bridge", checks: [{ cause: "unknown-variant", policy: "trap" }] })
     })
 
-    test("image-only variant, encode → unreachable (encode can never produce a variant local doesn't have)", () =>
+    test("image-only variant, decode, no policy → build error naming the position", () =>
     {
-        const image = root(struct({ tag: union({ known: unit, extra: unit }) }))
-        const local = root(struct({ tag: union({ known: unit }) }))
-        const tag = edgeOf(reconcile(image, local), "tag").correspondence
+        const tag = tagOf(union({ known: unit, extra: unit }), union({ known: unit }))
+        assert.throws(() => resolve(tag, edgeOf(tag, "extra"), "decode"), /decode at root\.tag .* no onUnknownVariant/)
+    })
 
+    test("a defaultVariant is the absent default only, never an unknown-variant fallback", () =>
+    {
+        const tag = tagOf(union({ known: unit, extra: unit }), union({ known: unit, unrecognized: unit }, { defaultVariant: "unrecognized" }))
+        assert.throws(() => resolve(tag, edgeOf(tag, "extra"), "decode"), /no onUnknownVariant/)
+    })
+
+    test("a replacement must be a variant of both sides", () =>
+    {
+        const tag = tagOf(union({ known: unit, extra: unit }), union({ known: unit, mine: unit }, { onUnknownVariant: { replace: "mine" } }))
+        assert.throws(() => resolve(tag, edgeOf(tag, "extra"), "decode"), /replacement "mine" .* not a variant of both sides/)
+    })
+
+    test("image-only variant, encode → unreachable", () =>
+    {
+        const tag = tagOf(union({ known: unit, extra: unit }), union({ known: unit }))
         assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "encode"), { action: "unreachable" })
     })
 
-    test("local-only variant, encode → trap, no wire representation (§4.5)", () =>
+    test("local-only variant, encode → the local onUnknownVariant; none is a build error", () =>
     {
-        const image = root(struct({ tag: union({ known: unit }) }))
-        const local = root(struct({ tag: union({ known: unit, extra: unit }) }))
-        const tag = edgeOf(reconcile(image, local), "tag").correspondence
-
-        const r = resolve(tag, edgeOf(tag, "extra"), "encode")
-        assert.equal(r.action, "trap")
+        const tag = tagOf(union({ known: unit }), union({ known: unit, extra: unit }, { onUnknownVariant: "trap" }))
+        assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "encode"),
+            { action: "bridge", checks: [{ cause: "unknown-variant", policy: "trap" }] })
+        const bare = tagOf(union({ known: unit }), union({ known: unit, extra: unit }))
+        assert.throws(() => resolve(bare, edgeOf(bare, "extra"), "encode"), /encode at root\.tag .* no onUnknownVariant/)
     })
 
-    test("local-only variant, decode → unreachable (the wire tag space never selects it)", () =>
+    test("local-only variant, decode → unreachable", () =>
     {
-        const image = root(struct({ tag: union({ known: unit }) }))
-        const local = root(struct({ tag: union({ known: unit, extra: unit }) }))
-        const tag = edgeOf(reconcile(image, local), "tag").correspondence
-
+        const tag = tagOf(union({ known: unit }), union({ known: unit, extra: unit }))
         assert.deepEqual(resolve(tag, edgeOf(tag, "extra"), "decode"), { action: "unreachable" })
     })
 
     test("matched variant → bridge, both directions", () =>
     {
-        const tag = edgeOf(reconcile(root(struct({ tag: union({ a: unit }) })), root(struct({ tag: union({ a: unit }) }))), "tag").correspondence
+        const tag = tagOf(union({ a: unit }), union({ a: unit }))
         assert.deepEqual(resolve(tag, edgeOf(tag, "a"), "encode"), { action: "bridge" })
         assert.deepEqual(resolve(tag, edgeOf(tag, "a"), "decode"), { action: "bridge" })
     })
 })
+
+describe("classify(): integer domains (§4.6)", () =>
+{
+    const leaf = (image: SemanticType, local: SemanticType): Correspondence =>
+        edgeOf(reconcile(root(struct({ v: image })), root(struct({ v: local }))), "v").correspondence
+
+    test("the destination contains the source → a bare bridge", () =>
+    {
+        assert.deepEqual(classify(leaf(u8, u16), "decode"), { action: "bridge" })
+        assert.deepEqual(classify(leaf(u16, u8), "encode"), { action: "bridge" })
+    })
+
+    test("a wider source is partial and needs the local policy for that direction", () =>
+    {
+        assert.throws(() => classify(leaf(u16, u8), "decode"), /decode at root\.v can see values outside 0\.\.255 .* no onOutOfDomain/)
+        assert.deepEqual(classify(leaf(u16, integer(0, 255, { onOutOfDomain: "saturate" })), "decode"),
+            { action: "bridge", checks: [{ cause: "out-of-domain", domain: [0, 255], policy: "saturate" }] })
+    })
+
+    test("a per-direction policy covers only its own direction", () =>
+    {
+        const c = leaf(integer(0, 100), integer(50, 200, { onOutOfDomain: { decode: "trap" } }))
+        assert.equal(classify(c, "decode").action, "bridge")
+        assert.throws(() => classify(c, "encode"), /encode at root\.v .* no onOutOfDomain/)
+    })
+
+    test("an encode replacement must land in the image's range", () =>
+    {
+        const c = leaf(integer(0, 100), integer(0, 200, { onOutOfDomain: { replace: 150 } }))
+        assert.throws(() => classify(c, "encode"), /replacement 150 at root\.v is outside the image's 0\.\.100/)
+    })
+
+    test("disjoint ranges are empty", () =>
+    {
+        assert.throws(() => classify(leaf(integer(0, 9), integer(10, 20)), "decode"), /no value fits both sides at root\.v/)
+    })
+})
+
+describe("classify(): list lengths (§4.7)", () =>
+{
+    const leaf = (image: SemanticType, local: SemanticType): Correspondence =>
+        edgeOf(reconcile(root(struct({ l: image })), root(struct({ l: local }))), "l").correspondence
+
+    test("a longer source needs onLength.over; a shorter one onLength.under", () =>
+    {
+        assert.throws(() => classify(leaf(list(u8, { maxLength: 8 }), list(u8, { maxLength: 4 })), "decode"), /more than 4 elements .* no onLength\.over/)
+        assert.deepEqual(classify(leaf(list(u8, { maxLength: 8 }), list(u8, { maxLength: 4, onLength: { over: "truncate" } })), "decode"),
+            { action: "bridge", checks: [{ cause: "over-length", maxLength: 4, policy: "truncate" }] })
+        assert.throws(() => classify(leaf(list(u8), list(u8, { minLength: 2 })), "decode"), /fewer than 2 elements .* no onLength\.under/)
+    })
+
+    test("an unbounded source is longer than any bounded destination", () =>
+    {
+        assert.throws(() => classify(leaf(list(u8), list(u8, { maxLength: 4 })), "decode"), /no onLength\.over/)
+    })
+
+    test("pad needs the local element's default", () =>
+    {
+        assert.throws(() => classify(leaf(list(u8), list(u8, { minLength: 2, onLength: { under: "pad" } })), "decode"), /integer at root\.l\[\] has no declared default/)
+    })
+
+    test("disjoint fixed lengths are empty", () =>
+    {
+        assert.throws(() => classify(leaf(bytes(4), bytes(6)), "decode"), /no length fits both sides at root\.l/)
+    })
+})
+

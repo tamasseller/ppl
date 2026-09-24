@@ -27,7 +27,7 @@ describe("codec image — container round trip", () =>
     {
         const SensorKind = union({ temperature: unit, humidity: unit })
         const Reading = struct({ sensor: SensorKind, value: i16 })
-        const Packet = struct({ readings: list(Reading, {capacity: 4}), status: u8 })
+        const Packet = struct({ readings: list(Reading, {maxLength: 4}), status: u8 })
 
         const image: CodecImage = {
             typeTree: Packet,

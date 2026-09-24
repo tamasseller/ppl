@@ -298,12 +298,14 @@ export function generateProcedure(
     index: number, raised: RaisedProc<CodecExtInstr>, entryNode: TypeNode | undefined, direction: Direction,
     projection: ReadonlyMap<number, TSTypeDecl>,
     entryCorrespondence?: Correspondence,
+    entryPath?: string,
 ): string
 {
     const slotTypes = new Map<number, TypeNode>(entryNode ? [[0, entryNode]] : [])
     const {maxSlot, listTraversalSlots, clones} = prescan(raised.body)
     const correspondences = entryCorrespondence ? new Map([[0, entryCorrespondence]]) : undefined
-    const g: GenCtx = {direction, slotTypes, projection, writeBacks: new Map(), idxDeclared: new Set(), tempCounter: {n: 0}, correspondences}
+    const slotPaths = new Map<number, string>(entryNode ? [[0, entryCorrespondence?.path ?? entryPath ?? describeType(entryNode)]] : [])
+    const g: GenCtx = {direction, slotTypes, projection, writeBacks: new Map(), idxDeclared: new Set(), tempCounter: {n: 0}, correspondences, slotPaths, lenDeclared: new Set()}
 
     const b = new LineBuilder()
 

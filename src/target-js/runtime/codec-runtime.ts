@@ -37,15 +37,34 @@
  *  program the two lists are always the same node's own, so this stays
  *  defensive/unreachable there — a real hit means the local value's own
  *  active-variant bookkeeping is corrupted, not a bridging outcome. */
-export function tagOf(variantName: string, variantNames: readonly string[]): number
+export function tagOf(variantName: string, variantNames: readonly string[], fallback: number = -1, where?: string): number
 {
     const idx = variantNames.indexOf(variantName)
-    if(idx < 0)
-    {
-        throw new CodecTrap(-1, `active variant "${variantName}" isn't one of ${JSON.stringify(variantNames)}`)
-    }
+    if(idx >= 0) return idx
+    if(fallback >= 0) return fallback
+    throw new CodecTrap(-1, `active variant "${variantName}"${where ? ` at ${where}` : ""} isn't one of ${JSON.stringify(variantNames)}`)
+}
 
-    return idx
+// ── Range checks (docs/reconciliation.md §5) ─────────────────────────────
+//
+// On the numeric value, never a wire bit pattern. Mixed number/bigint
+// comparison is well defined, so these serve a bigint host too.
+
+/** Validation and a `trap` policy: `v` itself, or a trap naming `what`. */
+export function inDomain<T extends number | bigint>(v: T, min: number, max: number, what: string): T
+{
+    if(!(v >= min && v <= max)) throw new CodecTrap(-1, `${what}: ${v} is outside ${min}..${max}`)
+    return v
+}
+
+export function saturate<T extends number | bigint>(v: T, min: number, max: number): T | number
+{
+    return v < min ? min : v > max ? max : v
+}
+
+export function orReplace<T extends number | bigint>(v: T, min: number, max: number, replacement: number): T | number
+{
+    return v >= min && v <= max ? v : replacement
 }
 
 // ── The byte stream ─────────────────────────────────────────────────────

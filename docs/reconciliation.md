@@ -1,9 +1,8 @@
 # Reconciliation
 
 > **Status:** partly implemented.
-> - Implemented: options-object constructors (§2.2), optional domain-checked defaults (§2.4), `meaning` (§2.1), name matching (§4.1), `reconcile` and `resolve` (§4.2), kind mismatch (§4.3), struct fields (§4.4), union variants (§4.5) with `defaultVariant` covering both causes. `src/core/reconcile.ts`, `src/target-js/engine/bridging-codec-module.ts`.
-> - Not implemented: `classify` (§4.2), validation seams (§5.2), integer domains (§4.6), list length domains (§4.7), policies (§2.5), transforms (§2.3), text (§2.6), their image encoding (§3.1).
-> - Today a matched integer or list always bridges unchecked. Staging is §7.
+> - Implemented: constructors (§2.2), defaults (§2.4), `meaning` (§2.1), policies (§2.5), §4 throughout (`reconcile`, `resolve`, `classify`), validation and checks in generated code (§5). `src/core/reconcile.ts`, `src/target-js/engine/codec-codegen-ext.ts`, `bridging-codec-module.ts`.
+> - Not implemented: transforms (§2.3), text (§2.6), their image encoding (§3.1). Every numbering is identity until then. Staging is §7.
 
 Builds on codec-extension.md (`TypeNode`, `Step`, `ref` addressing) and
 codec-image.md (what the image is and how it is encoded).
@@ -90,8 +89,8 @@ export interface ListType
 ```
 
 - A length is a plain pair, not an `IntegerType`: a `meaning` or transform on a length has no use.
-- A fixed length is `minLength = maxLength`. Today a list has only `capacity`, an upper bound, so fixed-length data (a MAC as `bytes(6)`) cannot be declared.
-- Constructors take an options object: `integer(min, max, {default})`, `list(T, {capacity})` today; later stages add `meaning`, `toCanonical`, the policies, and replace `capacity` with `minLength`/`maxLength`. Shared constants (`u8`, …) carry no default and no policy; a leaf that needs either is its own type object, as `default` already is.
+- A fixed length is `minLength = maxLength`.
+- Constructors take an options object: `integer(min, max, {default, meaning, onOutOfDomain})`, `list(T, {minLength, maxLength, onLength})`, `union(variants, {defaultVariant, onUnknownVariant})`. `toCanonical` joins `integer`'s in stage 6. Shared constants (`u8`, …) carry no default and no policy; a leaf that needs either is its own type object, as `default` already is.
 
 `meaning` and `toCanonical` are on the leaf, not a `named()` side channel:
 type names never travel on the wire, and both of these must.
@@ -150,7 +149,7 @@ What to do with a value the destination domain cannot hold. Always the consumer'
 - `saturate` and rounding are defined against the destination domain and need no such rule.
 - A partial edge (§4.3) with no policy for its cause is a build error, not a runtime trap. `trap` has to be written. Consequence: an image whose domain grew fails when that image is first reconciled, not on the first message that carries a new value.
 - Absence is not a cause here. It is §2.4's default, owned by the slot's tree: on encode the consumer has no leaf for an image-only field to hang a policy on.
-- Today `defaultVariant` serves as both the absent default and an unknown-variant `{replace}`. Splitting them lets "decoded as X" and "arrived as something this build does not know" be told apart.
+- `defaultVariant` is only the absent default; `onUnknownVariant` is separate, so "decoded as X" and "arrived as something this build does not know" can be told apart.
 
 ### 2.6 Text
 
@@ -172,10 +171,10 @@ A string is `list(integer)`; the element's `meaning` is `text:codepoint`, canoni
 - Carries no policies. They are the consumer's.
 - Encoder and decoder programs as the origin compiled them; reconciliation never rewrites them.
 - `meaning` is codec-image.md §3.2's `MEANING` postfix, naming a string-table entry.
+- Length bounds are codec-image.md §3.2's five list forms.
 - Proposed encoding for the rest:
   - Transform: a tag byte and operands. Rational is zigzag-LEB128 numerator, LEB128 denominator.
   - `table`s are interned in a table of their own, indexed like strings. A code page is 256 points and shared by construction.
-  - `LIST_EXT` carries both length bounds, with folds for `minLength = 0` and for a fixed length.
 
 ### 3.2 Origin's generated code
 
@@ -261,7 +260,6 @@ A variant set is a domain. A variant missing on the destination side is an out-o
 | local-only | encode | `onUnknownVariant`: `{replace}` or `trap` |
 
 - `unreachable` still compiles to a throw: the bytecode instruction exists.
-- Today: image-only/decode is `default` via `defaultVariant`, else a runtime trap; local-only/encode is always a runtime trap.
 
 ### 4.6 Integers
 
@@ -298,8 +296,8 @@ export type Check =
     | {readonly cause: "under-length"; readonly minLength: number; readonly policy: "trap" | "pad"}
 ```
 
-- `transform`/`checks` absent is exactly today's bare `bridge`. One edge can carry both an inexact and an out-of-domain check.
-- `trap` is no longer an action: it is a check's policy. `unknown-variant` with `{replace}` subsumes today's union `default`.
+- `transform` lands in stage 6. One edge can carry both an inexact and an out-of-domain check.
+- `trap` is not an action: it is a check's policy. `resolve` gives an unknown variant edge an `unknown-variant` check; `classify` gives one to the union at `TAG`.
 
 ## 5. Generated code
 
@@ -321,6 +319,7 @@ encode:  host ─toWire─▶ y ─[validate]─▶ y ∈ D_local ─[bridge g�
 - The bridge sits strictly outside codec procedures. Codec-internal state (e.g. a delta coder's previous value) is in image numbering.
 - Validation checks input coming from outside generated code: wire bytes on decode (`x ∈ D_image`, including a decoded length), application values on encode (`y ∈ D_local`). Failure is a policy-free trap (malformed message, invalid argument). It is not a reconciliation question.
 - A validation is elided when the producer guarantees it: a fixed wire width whose full range is the domain, or a host type no wider than the domain.
+- `target-js` knows no host type's range, so encode always validates.
 - A bridge check is elided when the edge is total.
 - Defaults (§2.4) enter after the bridge on decode and before the codec on encode, in their owner's numbering.
 
@@ -334,7 +333,8 @@ encode:  host ─toWire─▶ y ─[validate]─▶ y ∈ D_local ─[bridge g�
 | bulk transfer | `READ_SEQ` | `WRITE_SEQ` |
 
 - A partial element type turns a bulk transfer into a per-element loop, so a raw-buffer fast path (codec-extension.md §3.5) applies only to total edges.
-- The `under` check on decode sits at the list's close, once the count is known.
+- The `under` check on decode sits at the list's close, once the count is known: the return of the list's procedure. A checked list that is not its procedure's root is a codegen error.
+- A range check runs on the plain number: after sign extension and before `fromWire` on decode, before `toWire` on encode.
 - `truncate` on decode keeps running the codec, so the cursor stays right, and drops the appends past `maxLength`. On encode it presents a shortened view to `COUNT` and iteration.
 - `pad` appends element defaults at close on decode; on encode it presents a lengthened view.
 
@@ -363,13 +363,13 @@ Each stage carries its own image encoding change, and its tests: classification 
 2. Done: options-object constructors (§2.2).
 3. Done: optional, domain-checked `default` (§2.4); codec-image.md §3.2's integer forms fold "no default".
 4. Done: `meaning` (§2.1), its mismatch check in `reconcile` (§4.2), and its encoding. Catches different quantities; the same quantity in two numberings still bridges unchecked until stage 6.
-5. Domains and policies, as one step:
+5. Done: domains and policies, as one step:
    - `classify` (§4.2) and §4.8's `Resolution`.
    - Integer domains with identity numbering (§4.6), `onOutOfDomain`.
    - List length domains (§4.7) replacing `capacity`: `onLength`, `LIST_EXT`'s two bounds, the matcher's `pList` containment on both.
    - `onUnknownVariant` split from `defaultVariant` (§4.5).
    - Validation seams (§5.2) in both the origin's generator (`generateCodecModule`) and the bridging one.
-   - Closes today's unchecked range bridge.
+   - Closed the unchecked range bridge.
 6. `affine` transforms, `onInexact`, and their encoding. Covers every epoch and geodetic scale in Appendix A.
 7. `table`, its interning, and text (§2.6).
 8. Target consumption: branded numbers in `target-js`, a strong type or folded multiply in C++.
@@ -413,7 +413,7 @@ with the encoding.
 - V2 consumer, V1 image, encode: local-only → `drop`.
 - V1 consumer, V2 image, encode: image-only → the image's `default` `0`, written to the wire.
 - Had `quality` declared no default, the two `default` cases above would be build errors: `quality` would be required.
-- Server's `SensorKind` lacks the device's `pressure` variant, decode: image-only → `onUnknownVariant`, e.g. `{replace: "unrecognized"}`. Without one, build error (today: runtime trap unless `defaultVariant`).
+- Server's `SensorKind` lacks the device's `pressure` variant, decode: image-only → `onUnknownVariant`, e.g. `{replace: "unrecognized"}`. Without one, build error.
 
 ### A.2 Numberings
 

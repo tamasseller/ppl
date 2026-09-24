@@ -18,7 +18,7 @@ const Reading = named("Reading", struct({
 }))
 const Packet = named("Packet", struct({
     deviceId: integer(0, 0xFFFFFFFF),
-    readings: list(Reading, {capacity: 16}),
+    readings: list(Reading, {maxLength: 16}),
 }))
 ```
 

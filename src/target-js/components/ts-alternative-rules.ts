@@ -11,8 +11,8 @@
  * just that shape. None of these are wired into `tsTypeRules` itself.
  *
  * Two matcher facts every rule below leans on (`src/core/matcher.ts`):
- * `pInteger(min, max)`/`pList(_, capacityMax)` match by CONTAINMENT — the
- * pattern is an envelope the type's actual range/capacity must fit
+ * `pInteger(min, max)`/`pList(_, {minLength, maxLength})` match by CONTAINMENT — the
+ * pattern is an envelope the type's actual range/length bounds must fit
  * *inside* — so a narrower envelope tried first can carve out a subset of
  * what a wider envelope (the default rule, or another alternative here)
  * would otherwise catch. `pUnion({...})` (unlike `pUnionFields`) matches by
@@ -186,24 +186,24 @@ export const int16ListAsInt16ArrayRule: TsRule = tsRule(pList(pInteger(-32768, 3
         },
     } as TSTypeDecl]]))
 
-// ── List<T> capacity ≤1 → optional field ─────────────────────────────────
+// ── List<T> of length 0..1 → optional field ──────────────────────────────
 
-/** A list capped at one element is isomorphic to an optional value.
- *  Opt-in, not a default: capacity is a wire/storage bound, not a
+/** A list of at most one element is isomorphic to an optional value.
+ *  Opt-in, not a default: a length bound is a wire/storage bound, not a
  *  declaration of "this is optional" — collapsing it by default would
  *  surprise a caller expecting array methods (`.length`, `.map()`) on
- *  every `List<T>` regardless of capacity. */
-export const capacityOneListAsOptionalRule: TsRule = tsRule(pList(pStar(), 1),
+ *  every `List<T>` regardless of its bound. */
+export const capacityOneListAsOptionalRule: TsRule = tsRule(pList(pStar(), {maxLength: 1}),
     (match, _node, resolve) => `${resolve(match.elementType).ref} | null`,
     (_match, node) => ({ deps: [child(node, { element: true })!.id] }),
     () => ({
         kind: "list",
         // The decode accumulator is still a plain 0-or-1-element array
-        // (capacity 1 is enforced by the schema, not by this rule) —
+        // (`maxLength: 1` is enforced by the schema, not by this rule) —
         // `finishList` collapses it to this rule's own `T | null`.
         finishList: x => `${x}.length > 0 ? ${x}[0] : null`,
         count: v => `(${v} === null ? 0 : 1)`,
-        // Never called with an index other than 0 — a capacity-1 list has
+        // Never called with an index other than 0 — a 0..1 list has
         // no other element to ask for. `v`'s own static type is `T |
         // null`; `!` narrows it to `T` (this is only ever reached when
         // count() reported 1, i.e. v is genuinely non-null).
@@ -229,7 +229,7 @@ export const capacityOneListAsOptionalRule: TsRule = tsRule(pList(pStar(), 1),
 /** The TS counterpart to a C++ target's own
  *  `std::optional<T>` rule — both match the exact shape
  *  `src/core/metamodel.ts`'s `optional()` constructs
- *  (`union({value: T, empty: unit}, "empty")`), so a schema authored with
+ *  (`union({value: T, empty: unit}, {defaultVariant: "empty"})`), so a schema authored with
  *  `optional(T)` gets a matching idiomatic representation on both targets
  *  for free, with no per-target opt-in beyond this rule. Must be listed
  *  ahead of `unionAsClassHierarchyRule`/the default `unionFieldsRule`:

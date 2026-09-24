@@ -164,56 +164,65 @@ describe("bridging: struct, local-only field (§4.4)", () =>
 
 describe("bridging: union, image-only variant (decode) / local-only variant (encode) (§4.5)", () =>
 {
-    const Image = named("Status", union({ ok: u8, err: u8 }))
-
-    test("decode, local declares a default variant: an unrecognized tag materializes it", () =>
+    const Image = named("Status", union({ ok: u8, err: u8, none: unit }))
+    const imageBytes = (value: unknown): Uint8Array =>
     {
-        const Local = named("Status", union({ ok: u8, unknown: unit }, "unknown"))
         const image = imageOf(Image)
-        const imagePlain = loadGenerated(generateCodecModule({ name: "Status", rootType: Image, encodeProgram: image.encoderProgram, decodeProgram: image.decoderProgram }))
-        const bytes = imagePlain.encodeStatus({ variant: "err", value: 7 })
+        return loadGenerated(generateCodecModule({ name: "Status", rootType: Image, encodeProgram: image.encoderProgram, decodeProgram: image.decoderProgram })).encodeStatus(value)
+    }
+    const imageDecode = (bytes: Uint8Array): unknown =>
+    {
+        const image = imageOf(Image)
+        return loadGenerated(generateCodecModule({ name: "Status", rootType: Image, encodeProgram: image.encoderProgram, decodeProgram: image.decoderProgram })).decodeStatus(bytes)
+    }
 
-        const { decode } = loadBridged(image, Local, "Status")
-        assert.deepEqual(decode(bytes), { variant: "unknown", value: undefined })
+    test("decode, {replace}: an unknown tag still consumes its payload, then becomes the replacement", () =>
+    {
+        const Local = named("Status", union({ ok: u8, none: unit }, { onUnknownVariant: { replace: "none" } }))
+        const { decode } = loadBridged(imageOf(Image), Local, "Status")
+        assert.deepEqual(decode(imageBytes({ variant: "err", value: 7 })), { variant: "none", value: undefined })
+        assert.deepEqual(decode(imageBytes({ variant: "ok", value: 5 })), { variant: "ok", value: 5 })
     })
 
-    test("decode, local declares no default variant: an unrecognized tag traps", () =>
+    test("decode, trap: an unknown tag traps, naming the variant and the position", () =>
     {
-        const Local = named("Status", union({ ok: u8 }))
-        const image = imageOf(Image)
-        const imagePlain = loadGenerated(generateCodecModule({ name: "Status", rootType: Image, encodeProgram: image.encoderProgram, decodeProgram: image.decoderProgram }))
-        const bytes = imagePlain.encodeStatus({ variant: "err", value: 7 })
-
-        const { decode } = loadBridged(image, Local, "Status")
-        assert.throws(() => decode(bytes), /codec trap|isn't recognized locally/)
+        const Local = named("Status", union({ ok: u8, none: unit }, { onUnknownVariant: "trap" }))
+        const { decode } = loadBridged(imageOf(Image), Local, "Status")
+        assert.throws(() => decode(imageBytes({ variant: "err", value: 7 })), /unknown variant "err" at Status/)
     })
 
-    test("encode, local has an extra variant the image doesn't: encoding it traps", () =>
+    test("no policy for a variant the image has and the local union lacks: codegen fails", () =>
     {
-        const Local = named("Status", union({ ok: u8, extra: u8 }))
-        const image = imageOf(Image)
-        const { encode } = loadBridged(image, Local, "Status")
-        assert.throws(() => encode({ variant: "extra", value: 1 }), /isn't one of/)
+        const Local = named("Status", union({ ok: u8, none: unit }))
+        assert.throws(() => generateBridgingCodecModule({ name: "Status", image: imageOf(Image), localType: Local }), /decode at Status .* no onUnknownVariant/)
+    })
+
+    test("encode, trap: encoding a local-only variant traps", () =>
+    {
+        const Local = named("Status", union({ ok: u8, err: u8, none: unit, extra: u8 }, { onUnknownVariant: "trap" }))
+        const { encode } = loadBridged(imageOf(Image), Local, "Status")
+        assert.throws(() => encode({ variant: "extra", value: 1 }), /"extra" at Status isn't one of/)
+    })
+
+    test("encode, {replace}: a local-only variant goes out as the replacement", () =>
+    {
+        const Local = named("Status", union({ ok: u8, err: u8, none: unit, extra: u8 }, { onUnknownVariant: { replace: "none" } }))
+        const { encode } = loadBridged(imageOf(Image), Local, "Status")
+        assert.deepEqual(imageDecode(encode({ variant: "extra", value: 1 })), imageDecode(imageBytes({ variant: "none", value: undefined })))
     })
 
     test("encode, local is missing a variant the image has: the dead dispatch case still compiles and traps defensively if ever reached", () =>
     {
-        const Local = named("Status", union({ ok: u8 }))
-        const image = imageOf(Image)
-        const { encode } = loadBridged(image, Local, "Status")
+        const Local = named("Status", union({ ok: u8, none: unit }, { onUnknownVariant: "trap" }))
+        const { encode } = loadBridged(imageOf(Image), Local, "Status")
 
-        // The reachable path (the only one Local's own type can express)
-        // still works normally — proves the dead "err" case alongside it
+        // The reachable path still works — the dead "err" case alongside it
         // didn't break the switch it lives in.
-        const bytes = encode({ variant: "ok", value: 5 })
-        const imagePlain = loadGenerated(generateCodecModule({ name: "Status", rootType: Image, encodeProgram: image.encoderProgram, decodeProgram: image.decoderProgram }))
-        assert.deepEqual(imagePlain.decodeStatus(bytes), { variant: "ok", value: 5 })
+        assert.deepEqual(imageDecode(encode({ variant: "ok", value: 5 })), { variant: "ok", value: 5 })
 
-        // "err" is structurally unreachable through Local's own value type
-        // (TS can't even name it) — bypass typing to actually land on the
-        // dead case and confirm it's a defensive runtime trap, not a
-        // crash or silently-wrong bytes.
-        assert.throws(() => encode({ variant: "err", value: 7 } as any), /codec trap|unreachable/)
+        // "err" is unreachable through Local's own value type — bypass typing
+        // to land on the dead case and confirm it's a runtime trap.
+        assert.throws(() => encode({ variant: "err", value: 7 } as any), /structurally unreachable/)
     })
 })
 
