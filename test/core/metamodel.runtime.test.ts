@@ -10,6 +10,7 @@ import * as assert from "node:assert/strict"
 
 import {bytes, defaultValueOf, i8, integer, list, named, nameOf, optional, struct, u8, union, unit} from "../../src/core/metamodel"
 import {buildTypeGraph, child} from "../../src/core/type-graph"
+import {affine} from "../../src/core/transform"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 // integer: default is optional and must lie in min..max
@@ -38,6 +39,21 @@ test("integer: a meaning must be namespaced", () => {
     assert.throws(() => integer(0, 4095, {meaning: "voltage"}))
     assert.throws(() => integer(0, 4095, {meaning: "si:"}))
     assert.throws(() => integer(0, 4095, {meaning: "si:volt age"}))
+})
+
+test("integer: the domain fits 32 bits, signed or unsigned", () => {
+    integer(-(2 ** 31), 2 ** 31 - 1)
+    integer(0, 2 ** 32 - 1)
+    assert.throws(() => integer(-1, 2 ** 31), /fits neither 32-bit signed nor unsigned/)
+    assert.throws(() => integer(0, 2 ** 32), /fits neither/)
+    assert.throws(() => integer(-(2 ** 31) - 1, 0), /fits neither/)
+})
+
+test("integer: toCanonical needs a meaning, and an identity one is dropped", () => {
+    assert.throws(() => integer(0, 4095, {toCanonical: affine([1, 2048], [5, 2])}), /toCanonical needs a meaning/)
+    assert.equal("toCanonical" in integer(0, 4095, {meaning: "si:voltage", toCanonical: affine(1)}), false)
+    assert.deepEqual(integer(0, 4095, {meaning: "si:voltage", toCanonical: affine([2, 4096], [10, 4])}).toCanonical,
+        {op: "affine", scale: {num: 1n, den: 2048n}, offset: {num: 5n, den: 2n}})
 })
 
 test("integer: shared range constants (u8/i8) declare no default", () => {

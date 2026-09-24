@@ -2,6 +2,9 @@
  * Semantic Metamodel AST Definitions
  */
 
+import { isIdentity } from "./transform"
+import type { RoundingMode, Transform } from "./transform"
+
 export const enum SemanticTypeKinds
 {
     Unit     = "unit",
@@ -24,6 +27,7 @@ export type Policy<P> = P | {readonly decode?: P; readonly encode?: P}
 export type OutOfDomainPolicy = "trap" | "saturate" | {readonly replace: number}
 export type LengthPolicy = {readonly over?: "trap" | "truncate"; readonly under?: "trap" | "pad"}
 export type UnknownVariantPolicy = "trap" | {readonly replace: string}
+export type InexactPolicy = "trap" | RoundingMode
 
 /** Both halves of a `Policy`, whichever form it was written in. */
 export function policyHalves<P>(p: Policy<P> | undefined): {decode?: P; encode?: P}
@@ -48,7 +52,10 @@ export interface IntegerType
     /** Namespaced, e.g. `si:voltage`. Compatibility is equality where both
      *  sides declare one (docs/reconciliation.md §2.1). */
     meaning?: string
+    /** Absent: this numbering is the canonical one (docs/reconciliation.md §2.3). */
+    toCanonical?: Transform
     onOutOfDomain?: Policy<OutOfDomainPolicy>
+    onInexact?: Policy<InexactPolicy>
 }
 
 export interface ListType
@@ -103,11 +110,15 @@ export interface IntegerOptions
 {
     readonly default?: number
     readonly meaning?: string
+    readonly toCanonical?: Transform
     readonly onOutOfDomain?: Policy<OutOfDomainPolicy>
+    readonly onInexact?: Policy<InexactPolicy>
 }
 
 export const integer = (min: number, max: number, opts: IntegerOptions = {}): IntegerType =>
 {
+    if(min < -(2 ** 31) || max > 2 ** 32 - 1 || (min < 0 && max > 2 ** 31 - 1))
+        throw new Error(`integer: ${min}..${max} fits neither 32-bit signed nor unsigned`)
     if(opts.default !== undefined && (opts.default < min || max < opts.default))
         throw new Error(`integer: default ${opts.default} is outside ${min}..${max}`)
     if(opts.meaning !== undefined && !/^[^\s:]+:\S+$/.test(opts.meaning))
@@ -115,10 +126,15 @@ export const integer = (min: number, max: number, opts: IntegerOptions = {}): In
     for(const half of Object.values(policyHalves(opts.onOutOfDomain)))
         if(typeof half === "object" && (half.replace < min || max < half.replace))
             throw new Error(`integer: onOutOfDomain replacement ${half.replace} is outside ${min}..${max}`)
+    const toCanonical = opts.toCanonical !== undefined && !isIdentity(opts.toCanonical) ? opts.toCanonical : undefined
+    if(toCanonical !== undefined && opts.meaning === undefined)
+        throw new Error("integer: toCanonical needs a meaning to say what the canonical numbering is")
     return {
         kind: SemanticTypeKinds.Integer, min, max, default: opts.default,
         ...(opts.meaning !== undefined && {meaning: opts.meaning}),
+        ...(toCanonical !== undefined && {toCanonical}),
         ...(opts.onOutOfDomain !== undefined && {onOutOfDomain: opts.onOutOfDomain}),
+        ...(opts.onInexact !== undefined && {onInexact: opts.onInexact}),
     }
 }
 

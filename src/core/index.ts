@@ -6,6 +6,7 @@
  * general-purpose latent code writer.
  */
 export * from "./metamodel"
+export * from "./transform"
 export * from "./type-graph"
 export * from "./matcher"
 export * from "./projection"

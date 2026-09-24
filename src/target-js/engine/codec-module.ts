@@ -112,7 +112,7 @@ export interface CodecModuleOptions
  *  anywhere in this repo's tsconfigs). */
 export const RUNTIME_IMPORTS = [
     "read", "write", "hasNext", "cloneRd", "cloneWr", "seek", "pushForks", "popForks", "writeSeq", "readSeq", "readSeqView", "writeSeqRaw",
-    "tagOf", "signExtend", "revBits", "CodecTrap", "inDomain", "saturate", "orReplace",
+    "tagOf", "signExtend", "revBits", "CodecTrap", "inDomain", "saturate", "orReplace", "divRound",
     "cryptoSpec", "cryptoAbsorb", "cryptoAbsorbRest", "cryptoFinal", "cryptoVerify",
 ] as const
 

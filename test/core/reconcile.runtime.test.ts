@@ -18,6 +18,7 @@ import type { SemanticType } from "../../src/core/metamodel"
 import { buildTypeGraph } from "../../src/core/type-graph"
 import { struct, union, unit, u8, u16, integer, list, named, defaultValueOf, bytes } from "../../src/core/metamodel"
 
+import { affine, rational } from "../../src/core/transform"
 import { reconcile, resolve, classify } from "../../src/core/reconcile"
 import type { Correspondence, CorrespondenceEdge } from "../../src/core/reconcile"
 
@@ -378,6 +379,92 @@ describe("classify(): integer domains (§4.6)", () =>
     test("disjoint ranges are empty", () =>
     {
         assert.throws(() => classify(leaf(integer(0, 9), integer(10, 20)), "decode"), /no value fits both sides at root\.v/)
+    })
+})
+
+describe("classify(): transforms (§4.6)", () =>
+{
+    const leaf = (image: SemanticType, local: SemanticType): Correspondence =>
+        edgeOf(reconcile(root(struct({ v: image })), root(struct({ v: local }))), "v").correspondence
+    const volts = (min: number, max: number, scale: [number, number], offset: number | [number, number], opts = {}) =>
+        integer(min, max, { meaning: "si:voltage", toCanonical: affine(scale, offset), ...opts })
+
+    test("ADC counts → millivolts: inexact, then out of domain", () =>
+    {
+        const adc = volts(0, 4095, [1, 2048], [5, 2])
+        assert.throws(() => classify(leaf(adc, volts(2500, 4200, [1, 1000], 0)), "decode"),
+            /decode at root\.v converts by 125\/256·x \+ 2500, which is inexact, .* no onInexact/)
+        assert.throws(() => classify(leaf(adc, volts(2500, 4200, [1, 1000], 0, { onInexact: "nearest-even" })), "decode"),
+            /can see values outside 2500\.\.4200 .* no onOutOfDomain/)
+        assert.deepEqual(classify(leaf(adc, volts(2500, 4200, [1, 1000], 0, { onInexact: "nearest-even", onOutOfDomain: "saturate" })), "decode"), {
+            action: "bridge",
+            transform: { op: "affine", scale: rational(125n, 256n), offset: rational(2500n) },
+            checks: [{ cause: "inexact", policy: "nearest-even" }, { cause: "out-of-domain", domain: [2500, 4200], policy: "saturate" }],
+        })
+    })
+
+    test("deci-Celsius → millikelvin: total on decode, inexact on encode", () =>
+    {
+        const t = (min: number, max: number, scale: [number, number], offset: number | [number, number], opts = {}) =>
+            integer(min, max, { meaning: "si:temperature", toCanonical: affine(scale, offset), ...opts })
+        const c = leaf(t(-400, 1250, [1, 10], [5463, 20]), t(233150, 398150, [1, 1000], 0, { onInexact: { encode: "trap" } }))
+        assert.deepEqual(classify(c, "decode"), { action: "bridge", transform: { op: "affine", scale: rational(100n), offset: rational(273150n) } })
+        assert.deepEqual(classify(c, "encode"), {
+            action: "bridge",
+            transform: { op: "affine", scale: rational(1n, 100n), offset: rational(-5463n, 2n) },
+            checks: [{ cause: "inexact", policy: "trap" }],
+        })
+    })
+
+    test("binary angle measure → degrees × 1e7: inexact, within 2^53, in domain once rounded", () =>
+    {
+        const lon = (min: number, max: number, scale: [number, number], opts = {}) =>
+            integer(min, max, { meaning: "geo:longitude", toCanonical: affine(scale), ...opts })
+        const c = leaf(lon(-(2 ** 31), 2 ** 31 - 1, [45, 2 ** 29]), lon(-1800000000, 1800000000, [1, 10 ** 7], { onInexact: "nearest-even" }))
+        assert.deepEqual(classify(c, "decode"), {
+            action: "bridge",
+            transform: { op: "affine", scale: rational(3515625n, 4194304n), offset: rational(0n) },
+            checks: [{ cause: "inexact", policy: "nearest-even" }],
+        })
+    })
+
+    test("NTP seconds → Unix seconds: exact, but pre-1970 is out of domain", () =>
+    {
+        const ntp = integer(0, 2 ** 32 - 1, { meaning: "time:utc-instant", toCanonical: affine(1, -2208988800) })
+        assert.throws(() => classify(leaf(ntp, integer(0, 2 ** 32 - 1, { meaning: "time:utc-instant" })), "decode"),
+            /can see values outside 0\.\.4294967295 .* no onOutOfDomain/)
+        assert.deepEqual(classify(leaf(ntp, integer(0, 2 ** 32 - 1, { meaning: "time:utc-instant", onOutOfDomain: "trap" })), "decode"), {
+            action: "bridge",
+            transform: { op: "affine", scale: rational(1n), offset: rational(-2208988800n) },
+            checks: [{ cause: "out-of-domain", domain: [0, 4294967295], policy: "trap" }],
+        })
+    })
+
+    test("intermediates past 2^53 are a build error", () =>
+    {
+        const c = leaf(integer(0, 2 ** 32 - 1, { meaning: "x:y", toCanonical: affine(3000000) }), integer(0, 2 ** 32 - 1, { meaning: "x:y", onOutOfDomain: "saturate" }))
+        assert.throws(() => classify(c, "decode"), /decode at root\.v converts by 3000000·x \+ 0, whose intermediates over 0\.\.4294967295 reach 12884901885000000, past 2\^53/)
+    })
+
+    test("an encode replacement is converted into the image's numbering, and must land exactly", () =>
+    {
+        const image = integer(0, 100, { meaning: "x:y", toCanonical: affine(10) })
+        const local = (replace: number) => integer(0, 2000, { meaning: "x:y", onInexact: "floor", onOutOfDomain: { replace } })
+        assert.deepEqual(classify(leaf(image, local(500)), "encode"), {
+            action: "bridge",
+            transform: { op: "affine", scale: rational(1n, 10n), offset: rational(0n) },
+            checks: [{ cause: "inexact", policy: "floor" }, { cause: "out-of-domain", domain: [0, 100], policy: { replace: 50 } }],
+        })
+        assert.throws(() => classify(leaf(image, local(505)), "encode"), /replacement 505 at root\.v has no exact value in the image's numbering/)
+    })
+
+    test("a transform on the only side with a meaning has nothing to convert to", () =>
+    {
+        const volts = integer(0, 4095, { meaning: "si:voltage", toCanonical: affine([1, 2048]) })
+        assert.throws(() => reconcile(root(struct({ v: volts })), root(struct({ v: integer(0, 4095) }))),
+            /only the image side declares a meaning at root\.v, so its toCanonical has nothing to convert to/)
+        assert.throws(() => reconcile(root(struct({ v: integer(0, 4095) })), root(struct({ v: volts }))), /only the local side/)
+        assert.doesNotThrow(() => reconcile(root(struct({ v: integer(0, 4095, { meaning: "si:voltage" }) })), root(struct({ v: integer(0, 4095) }))))
     })
 })
 

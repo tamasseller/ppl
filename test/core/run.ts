@@ -5,6 +5,7 @@ import "./matcher.runtime.test"
 import "./type-graph.runtime.test"
 import "./resolver.runtime.test"
 import "./metamodel.runtime.test"
+import "./transform.runtime.test"
 import "./reconcile.runtime.test"
 
 // NOTE: matcher.types.test.ts is compile-time only — it verifies

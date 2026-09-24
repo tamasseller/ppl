@@ -13,7 +13,7 @@ import assert from "node:assert/strict"
 
 import type { IntegerType, SemanticType, StructType } from "../../src/core/index"
 import {
-    SemanticTypeKinds, bytes as fixedBytes, derefType, i16, i32, i8, integer, list, struct, u16, u32, u8, union, unit,
+    SemanticTypeKinds, affine, bytes as fixedBytes, derefType, i16, i32, i8, integer, list, struct, u16, u32, u8, union, unit,
 } from "../../src/core/index"
 
 import { decodeTypeTree, encodeTypeTree } from "../../src/codecs/engine/type-tree-wire"
@@ -28,7 +28,8 @@ function sameShape(a: SemanticType, b: SemanticType): void
         case SemanticTypeKinds.Integer:
         {
             const bi = tb as typeof ta
-            assert.deepEqual({ min: ta.min, max: ta.max, default: ta.default, meaning: ta.meaning }, { min: bi.min, max: bi.max, default: bi.default, meaning: bi.meaning })
+            assert.deepEqual({ min: ta.min, max: ta.max, default: ta.default, meaning: ta.meaning, toCanonical: ta.toCanonical },
+                { min: bi.min, max: bi.max, default: bi.default, meaning: bi.meaning, toCanonical: bi.toCanonical })
             break
         }
         case SemanticTypeKinds.List:
@@ -136,6 +137,36 @@ describe("type tree wire — leaves", () =>
     test("MEANING on anything but an integer is rejected", () =>
     {
         assert.throws(() => decodeTypeTree(Uint8Array.from([1, 4, ...new TextEncoder().encode("a:bc"), 0xC0, 0xD1, 0, 0xD0])), /MEANING applied to a unit/)
+    })
+
+    test("a transform is an AFFINE postfix on the meaningful integer: zigzag numerators, plain denominators", () =>
+    {
+        const { bytes } = roundTrip(integer(0, 4095, {meaning: "si:voltage", toCanonical: affine([1, 2048], [5, 2])}))
+        const utf8 = [...new TextEncoder().encode("si:voltage")]
+        assert.deepEqual([...bytes], [1, utf8.length, ...utf8, 0xC7, 0xFF, 0x1F, 0xD1, 0, 0xD5, 2, 0x80, 0x10, 10, 2, 0xD0])
+    })
+
+    test("AFFINE operands are unbounded, and negative offsets survive", () =>
+    {
+        roundTrip(integer(0, 2 ** 32 - 1, {meaning: "time:utc-instant", toCanonical: affine(1, -2208988800)}))
+        roundTrip(integer(-(2 ** 31), 2 ** 31 - 1, {meaning: "geo:longitude", toCanonical: affine([45, 2 ** 29])}))
+        roundTrip(integer(0, 9, {meaning: "x:y", toCanonical: affine([-(2n ** 70n), 3n], [1n, 2n ** 64n])}))
+    })
+
+    test("AFFINE is its own construction: dedup keeps two numberings of one quantity apart", () =>
+    {
+        const { decoded } = roundTrip(struct({
+            a: integer(0, 4095, {meaning: "si:voltage", toCanonical: affine([1, 2048])}),
+            b: integer(0, 4095, {meaning: "si:voltage", toCanonical: affine([1, 1000])}),
+            c: integer(0, 4095, {meaning: "si:voltage"}),
+        }))
+        const s = derefType(decoded) as StructType
+        assert.equal((derefType(s.fields.get("c")!) as IntegerType).toCanonical, undefined)
+    })
+
+    test("AFFINE on anything but an integer is rejected", () =>
+    {
+        assert.throws(() => decodeTypeTree(Uint8Array.from([0, 0xC0, 0xD5, 2, 1, 0, 1, 0xD0])), /AFFINE applied to a unit/)
     })
 
     test("negative min/max/default round-trip correctly (zigzag sign)", () =>

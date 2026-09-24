@@ -1,8 +1,8 @@
 # Reconciliation
 
 > **Status:** partly implemented.
-> - Implemented: constructors (§2.2), defaults (§2.4), `meaning` (§2.1), policies (§2.5), §4 throughout (`reconcile`, `resolve`, `classify`), validation and checks in generated code (§5). `src/core/reconcile.ts`, `src/target-js/engine/codec-codegen-ext.ts`, `bridging-codec-module.ts`.
-> - Not implemented: transforms (§2.3), text (§2.6), their image encoding (§3.1). Every numbering is identity until then. Staging is §7.
+> - Implemented: constructors (§2.2), defaults (§2.4), `meaning` (§2.1), policies (§2.5), `affine` transforms and their encoding (§2.3, §3.1), §4 throughout (`reconcile`, `resolve`, `classify`), validation, bridge and checks in generated code (§5). `src/core/transform.ts`, `src/core/reconcile.ts`, `src/target-js/engine/codec-codegen-ext.ts`, `bridging-codec-module.ts`.
+> - Not implemented: `log` and `table` transforms (§2.3), text (§2.6). Staging is §7.
 
 Builds on codec-extension.md (`TypeNode`, `Step`, `ref` addressing) and
 codec-image.md (what the image is and how it is encoded).
@@ -88,9 +88,11 @@ export interface ListType
 // bytes(n) = list(u8, {minLength: n, maxLength: n})
 ```
 
+- A domain fits 32 bits, signed or unsigned; `integer` refuses anything wider. Target projections still choose any host type.
+- `toCanonical` needs a `meaning` on the same leaf. An identity `toCanonical` is dropped.
 - A length is a plain pair, not an `IntegerType`: a `meaning` or transform on a length has no use.
 - A fixed length is `minLength = maxLength`.
-- Constructors take an options object: `integer(min, max, {default, meaning, onOutOfDomain})`, `list(T, {minLength, maxLength, onLength})`, `union(variants, {defaultVariant, onUnknownVariant})`. `toCanonical` joins `integer`'s in stage 6. Shared constants (`u8`, …) carry no default and no policy; a leaf that needs either is its own type object, as `default` already is.
+- Constructors take an options object: `integer(min, max, {default, meaning, toCanonical, onOutOfDomain, onInexact})`, `list(T, {minLength, maxLength, onLength})`, `union(variants, {defaultVariant, onUnknownVariant})`. Shared constants (`u8`, …) carry no default and no policy; a leaf that needs either is its own type object, as `default` already is.
 
 `meaning` and `toCanonical` are on the leaf, not a `named()` side channel:
 type names never travel on the wire, and both of these must.
@@ -100,7 +102,7 @@ type names never travel on the wire, and both of these must.
 Total on a declared domain, deterministic, composable, invertible.
 
 ```ts
-export interface Rational { readonly num: number; readonly den: number }  // normalized, den > 0
+export interface Rational { readonly num: bigint; readonly den: bigint }  // normalized, den > 0
 
 export type Transform =
     | {readonly op: "identity"}
@@ -109,12 +111,14 @@ export type Transform =
     | {readonly op: "table"; readonly points: readonly (readonly [number, number])[]; readonly interp: "none" | "linear"}
 ```
 
+- Implemented: `affine`, written `affine(scale, offset)` with integers or `[num, den]` pairs.
 - Scale is an exact rational, never a float: chains compose exactly, a power-of-two ratio is decidable (emit a shift), identity is recognizable (emit nothing).
 - `log`'s `reference` is mandatory: dBm vs dBV vs dBFS is where dB bugs live.
 - `compose` returns `readonly Transform[]`, normalized by folding adjacent affines and dropping identities. Only affine is closed under composition.
 - Inversion: affine iff `scale ≠ 0`; log always; table iff injective (`interp: "none"`) or strictly monotonic (`"linear"`). Checked at build time.
 - `table` is the only op total on less than its input range: it is total on its own point set (§2.6).
-- Exactness (every source value lands on an integer) is decidable for affine and table.
+- An affine map is exact iff its scale and offset are integers. A domain narrower than the denominator can be over-reported; that costs a rounding policy that never fires.
+- Generated code evaluates an affine map as `(mul·x + add) / div` in plain numbers. An edge where `|mul·x + add|` or `div` can pass 2^53 over its source domain is a build error. A target without 53-bit intermediates may refuse or warn.
 - The contract is the scope test: a candidate needs a shared canonical and a map to it that is total on a declared domain, deterministic and invertible. DNS resolution fails all four, so a hostname and an IPv4 address are a `union`, not an op (§6).
 - GPS/TAI vs UTC is affine only within one leap era; across eras it is a `table`, invertible except for the one ambiguous second at a positive leap. That ambiguity is in the timescales.
 
@@ -167,14 +171,13 @@ A string is `list(integer)`; the element's `meaning` is `text:codepoint`, canoni
 
 ### 3.1 Codec image
 
-- Carries the origin's semantic tree with its projection: kinds, names, `min`/`max`/`default`, `minLength`/`maxLength`, `defaultVariant`, `meaning`, and (proposed) `toCanonical`.
+- Carries the origin's semantic tree with its projection: kinds, names, `min`/`max`/`default`, `minLength`/`maxLength`, `defaultVariant`, `meaning`, `toCanonical`.
 - Carries no policies. They are the consumer's.
 - Encoder and decoder programs as the origin compiled them; reconciliation never rewrites them.
 - `meaning` is codec-image.md §3.2's `MEANING` postfix, naming a string-table entry.
 - Length bounds are codec-image.md §3.2's five list forms.
-- Proposed encoding for the rest:
-  - Transform: a tag byte and operands. Rational is zigzag-LEB128 numerator, LEB128 denominator.
-  - `table`s are interned in a table of their own, indexed like strings. A code page is 256 points and shared by construction.
+- `affine` is codec-image.md §3.2's `AFFINE` postfix on a meaningful integer.
+- Proposed: `table`s are interned in a table of their own, indexed like strings. A code page is 256 points and shared by construction.
 
 ### 3.2 Origin's generated code
 
@@ -206,10 +209,10 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
 ```
 
 - `reconcile` is the direction-agnostic lock-step walk. Each node is `matched`, `image-only` or `local-only`.
-- `reconcile` throws on a kind or `meaning` mismatch: both are the same in either direction.
+- `reconcile` throws on a kind or `meaning` mismatch, and on a one-sided `toCanonical` (§4.6): all are the same in either direction.
 - Memoized on the `(imageNode, localNode)` pair, reserved before recursing, so a cycle or shared type returns the same `Correspondence`. Names live on edges, never on nodes, for the same reason as `TypeEdge`.
 - `resolve` is direction-aware and per edge. Its parent must be `matched`: a non-bridged edge's resolution covers everything inside it.
-- Proposed: a third function classifies a matched leaf for one direction (§4.3):
+- `classify` classifies a matched leaf for one direction (§4.3):
 
 ```ts
 export function classify(c: Correspondence, direction: Direction): Resolution  // throws on an empty domain
@@ -265,8 +268,11 @@ A variant set is a domain. A variant missing on the destination side is an out-o
 
 For a matched integer leaf and a direction:
 1. `g = f_dst⁻¹ ∘ f_src`, normalized (§2.3). `meaning` already matches: `reconcile` rejected a mismatch.
-2. `g(D_src)` against `D_dst` → total, partial or empty.
-3. `g` inexact on `D_src` → partial, `onInexact` applies.
+2. `g` inexact on `D_src` → partial, `onInexact` applies.
+3. `g(D_src)`, rounded per step 2, against `D_dst` → total, partial or empty. Affine is monotonic, so the two rounded endpoints decide it; under `trap` they round inward.
+
+- A `toCanonical` on the only side with a `meaning` is rejected by `reconcile`: there is no canonical to convert to.
+- `g` past 2^53 is a build error (§2.3).
 
 - The wire width is always the image's; the local domain bounds only local storage.
 - Encode: `D_src` is the local domain, so a local range wider than the image's is partial and needs `onOutOfDomain`.
@@ -283,7 +289,7 @@ For a matched integer leaf and a direction:
 
 ```ts
 export type Resolution =
-    | {readonly action: "bridge"; readonly transform?: readonly Transform[]; readonly checks?: readonly Check[]}
+    | {readonly action: "bridge"; readonly transform?: Transform; readonly checks?: readonly Check[]}
     | {readonly action: "drop"}
     | {readonly action: "default"; readonly value: unknown}
     | {readonly action: "unreachable"}
@@ -296,7 +302,9 @@ export type Check =
     | {readonly cause: "under-length"; readonly minLength: number; readonly policy: "trap" | "pad"}
 ```
 
-- `transform` lands in stage 6. One edge can carry both an inexact and an out-of-domain check.
+- `transform` is `g`, the composed affine. It becomes a list once `log` or `table` can appear, since neither folds.
+- One edge can carry both an inexact and an out-of-domain check.
+- An encode `{replace: v}` is carried as `g(v)`, already in image numbering.
 - `trap` is not an action: it is a check's policy. `resolve` gives an unknown variant edge an `unknown-variant` check; `classify` gives one to the union at `TAG`.
 
 ## 5. Generated code
@@ -335,6 +343,8 @@ encode:  host ─toWire─▶ y ─[validate]─▶ y ∈ D_local ─[bridge g�
 - A partial element type turns a bulk transfer into a per-element loop, so a raw-buffer fast path (codec-extension.md §3.5) applies only to total edges.
 - Decode's length checks and `pad` sit at the list's close, codec-extension.md's `CLOSE_LIST`, once the count is known. A checked list that is never closed is a codegen error.
 - A range check runs on the plain number: after sign extension and before `fromWire` on decode, before `toWire` on encode.
+- The bridge runs validate, then `g`, then rounding, then the domain check. `saturate` and `replace` see the rounded value.
+- A converting element edge turns a bulk transfer into a per-element loop, as a partial one does.
 - `truncate` on decode keeps running the codec, so the cursor stays right, and drops the appends past `maxLength`. On encode it presents a shortened view to `COUNT` and iteration.
 - `pad` appends element defaults at `CLOSE_LIST` on decode; on encode it presents a lengthened view.
 
@@ -348,6 +358,8 @@ encode:  host ─toWire─▶ y ─[validate]─▶ y ∈ D_local ─[bridge g�
 
 ## 6. Out of scope
 
+- **Values wider than 32 bits** (§2.2). A 64-bit timestamp is two leaves at most.
+- **Numberings across leaves**: a timestamp as `{seconds, millis}`. Rounding `millis` carries into `seconds`, and a transform sees one leaf.
 - **Runtime calibration.** A nominal transform is a build-time constant; a device's actual calibration is per-device data and must travel on the wire. That needs one field to scale another (IEEE 1451 TEDS), the first thing here that multiplies two quantities.
 - **Sentinels** (`0x8000` = fault): `union({value, fault: unit})`, with the codec merging the sentinel into the value space (TODO.md's small-value-space merging). No NaN-likes in a leaf.
 - **Shared role without a shared canonical** (hostname vs address): a `union`, per §2.3.
@@ -362,7 +374,7 @@ Each stage carries its own image encoding change, and its tests: classification 
 1. Done: §4.1, §4.2's `reconcile` and `resolve`, §4.4, §4.5 via `defaultVariant`, §2.4.
 2. Done: options-object constructors (§2.2).
 3. Done: optional, domain-checked `default` (§2.4); codec-image.md §3.2's integer forms fold "no default".
-4. Done: `meaning` (§2.1), its mismatch check in `reconcile` (§4.2), and its encoding. Catches different quantities; the same quantity in two numberings still bridges unchecked until stage 6.
+4. Done: `meaning` (§2.1), its mismatch check in `reconcile` (§4.2), and its encoding. Catches different quantities.
 5. Done: domains and policies, as one step:
    - `classify` (§4.2) and §4.8's `Resolution`.
    - Integer domains with identity numbering (§4.6), `onOutOfDomain`.
@@ -370,7 +382,7 @@ Each stage carries its own image encoding change, and its tests: classification 
    - `onUnknownVariant` split from `defaultVariant` (§4.5).
    - Validation seams (§5.2) in both the origin's generator (`generateCodecModule`) and the bridging one.
    - Closed the unchecked range bridge.
-6. `affine` transforms, `onInexact`, and their encoding. Covers every epoch and geodetic scale in Appendix A.
+6. Done: `affine` transforms, `onInexact`, and their encoding; the 32-bit domain cap. Covers every epoch and geodetic scale in Appendix A.
 7. `table`, its interning, and text (§2.6).
 8. Target consumption: branded numbers in `target-js`, a strong type or folded multiply in C++.
 9. `log`, then a `meaning` registry (J1939 SLOT as the model).
@@ -423,7 +435,7 @@ with the encoding.
 | `si:voltage` | `2500..4200` | `affine{1/1000, 0}`: millivolts |
 | `si:temperature` | `-400..1250` | `affine{1/10, 5463/20}`: deci-Celsius, canonical kelvin |
 | `si:temperature` | `233150..398150` | `affine{1/1000, 0}`: millikelvin |
-| `time:utc-instant` | `0..4102444800000` | `affine{1/1000, 0}`: Unix ms |
+| `time:utc-instant` | `0..4294967295` | `identity`: Unix seconds |
 | `time:utc-instant` | `0..4294967295` | `affine{1, -2208988800}`: NTP seconds |
 | `geo:longitude` | `-2^31..2^31-1` | `affine{45/2^29, 0}`: binary angle measure |
 | `geo:longitude` | `-1800000000..1800000000` | `affine{1/10^7, 0}`: degrees × 1e7 |
@@ -437,7 +449,7 @@ with the encoding.
 | ADC counts → millivolts | `affine{125/256, 2500}`, `(x*125 >> 8) + 2500` | partial: inexact; `g(0..4095)` = 2500..4500 exceeds `..4200` |
 | deci-Celsius → millikelvin | `affine{100, 273150}` | total |
 | BAM → degrees × 1e7 | `affine{3515625/4194304, 0}`, `(x*3515625) >> 22` | partial: inexact |
-| NTP → Unix ms | `affine{1000, -2208988800000}` | partial: pre-1970 instants are out of domain |
+| NTP → Unix seconds | `affine{1, -2208988800}` | partial: pre-1970 instants are out of domain |
 | ASCII → Unicode | `identity` | total |
 | Windows-1252 → Unicode | `table` | partial: the five holes |
 

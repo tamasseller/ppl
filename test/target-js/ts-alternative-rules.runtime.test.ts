@@ -15,7 +15,6 @@ import {projectTSTypes, emitTSDeclarations} from "../../src/target-js/engine/res
 import {tsTypeRules} from "../../src/target-js/components/ts-emitter"
 import {
     unitAsUndefinedRule,
-    bigIntEscalationRules,
     byteListAsUint8ArrayRule,
     capacityOneListAsOptionalRule,
     optionalUnionRule,
@@ -32,24 +31,6 @@ test("ts-alternative-rules: unitAsUndefinedRule maps unit to undefined", () => {
     const r = projectTSTypes(unit, [unitAsUndefinedRule, ...tsTypeRules])
     assert.equal(r.get(0)?.ref, "undefined")
     // No top-level decl for a bare unit — nothing for ts-check to compile.
-})
-
-////////////////////////////////////////////////////////////////////////////////////////////////
-// Integer → bigint past Number's safe range
-////////////////////////////////////////////////////////////////////////////////////////////////
-
-test("ts-alternative-rules: bigIntEscalationRules keeps safe-range integers as number", () => {
-    const T = struct({count: integer(0, 255)})
-    const r = projectTSTypes(T, [...bigIntEscalationRules, ...tsTypeRules])
-    assert.ok(r.get(0)!.decl!.includes("count: number;"))
-    assertCompiles(emitTSDeclarations(r))
-})
-
-test("ts-alternative-rules: bigIntEscalationRules escalates out-of-safe-range integers to bigint", () => {
-    const T = struct({count: integer(0, Number.MAX_SAFE_INTEGER + 1)})
-    const r = projectTSTypes(T, [...bigIntEscalationRules, ...tsTypeRules])
-    assert.ok(r.get(0)!.decl!.includes("count: bigint;"))
-    assertCompiles(emitTSDeclarations(r))
 })
 
 ////////////////////////////////////////////////////////////////////////////////////////////////

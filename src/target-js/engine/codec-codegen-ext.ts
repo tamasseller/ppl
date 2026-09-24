@@ -36,7 +36,7 @@ import type {Accessor, TSTypeDecl} from "./resolver"
 import {LineBuilder} from "./line-builder"
 import {requireEdge, variantNamesOf, describeType} from "./codec-type-nav"
 import {translateExpr} from "./codec-codegen"
-import {wireWindow, inDomain, applyOutOfDomain} from "./codec-checks"
+import {wireWindow, inDomain, applyBridge} from "./codec-checks"
 
 // ─────────────────────────────────────────────────────────────────────────
 // Generation context
@@ -172,14 +172,20 @@ function pathOf(slot: number, g: GenCtx): string
     return g.correspondences?.get(slot)?.path ?? g.slotPaths.get(slot) ?? `slot ${slot}`
 }
 
-/** The checks a bridged, matched slot needs; none for any other slot. */
-function checksOf(slot: number, g: GenCtx): readonly Check[]
+type Bridge = Extract<Resolution, {action: "bridge"}>
+
+function bridgeOfCorrespondence(c: Correspondence | undefined, g: GenCtx): Bridge
 {
-    const c = g.correspondences?.get(slot)
-    if(c?.outcome !== "matched") return []
-    const r = classify(c, g.direction)
-    return r.action === "bridge" ? r.checks ?? [] : []
+    const r = c?.outcome === "matched" ? classify(c, g.direction) : undefined
+    return r?.action === "bridge" ? r : {action: "bridge"}
 }
+
+/** What a bridged, matched slot converts and checks; nothing for any other slot. */
+const bridgeOf = (slot: number, g: GenCtx): Bridge => bridgeOfCorrespondence(g.correspondences?.get(slot), g)
+
+const checksOf = (slot: number, g: GenCtx): readonly Check[] => bridgeOf(slot, g).checks ?? []
+
+const converts = (b: Bridge): boolean => b.transform !== undefined || (b.checks?.length ?? 0) > 0
 
 /** The type an application value is validated against: the local one when bridging. */
 function localTypeOf(slot: number, g: GenCtx): ConcreteSemanticType
@@ -194,23 +200,23 @@ function localElementNode(slot: number, g: GenCtx): TypeNode
 }
 
 /** A decoded integer as a checked plain number: validated against the image's
- *  range where the wire can carry more, then the bridge's out-of-domain policy.
- *  `undefined` when neither applies, so the caller keeps its unchecked form. */
-function checkedDecodedNumber(t: IntegerType, raw: string, checks: readonly Check[], where: string): string | undefined
+ *  range where the wire can carry more, then bridged. `undefined` when
+ *  neither applies, so the caller keeps its unchecked form. */
+function checkedDecodedNumber(t: IntegerType, raw: string, bridge: Bridge, where: string): string | undefined
 {
     const width = intWireSize(t)
     const signed = t.min < 0
     const [lo, hi] = wireWindow(width, signed)
     const validate = lo < t.min || t.max < hi
-    if(!validate && checks.length === 0) return undefined
+    if(!validate && !converts(bridge)) return undefined
     const n = signed ? `signExtend(${width * 8}, ${raw})` : raw
-    return applyOutOfDomain(validate ? inDomain(n, t.min, t.max, `malformed value at ${where}`) : n, checks, where)
+    return applyBridge(validate ? inDomain(n, t.min, t.max, `malformed value at ${where}`) : n, bridge, where)
 }
 
-/** An application integer, validated against the local range, then the bridge's policy. */
-function checkedEncodedNumber(t: IntegerType, value: string, checks: readonly Check[], where: string): string
+/** An application integer, validated against the local range, then bridged. */
+function checkedEncodedNumber(t: IntegerType, value: string, bridge: Bridge, where: string): string
 {
-    return applyOutOfDomain(inDomain(value, t.min, t.max, `invalid value at ${where}`), checks, where)
+    return applyBridge(inDomain(value, t.min, t.max, `invalid value at ${where}`), bridge, where)
 }
 
 /** Whether decode counts this list's elements: to validate its length against
@@ -300,13 +306,13 @@ function emitCheckedSeq(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext}>, g
     const where = `${pathOf(list, g)}[]`
     const listCorr = g.correspondences?.get(list)
     const elemCorr = listCorr?.outcome === "matched" ? correspondenceElement(listCorr) : undefined
-    const elemChecks = elemCorr?.outcome === "matched" ? (r => r.action === "bridge" ? r.checks ?? [] : [])(classify(elemCorr, g.direction)) : []
+    const elemBridge = bridgeOfCorrespondence(elemCorr, g)
     const count = translateExpr(e.args[0]!, g)
 
     if(e.ext === "READ_SEQ")
     {
         const elemType = requireEdge(listNode, 0, "READ_SEQ").target.type as IntegerType
-        const checked = checkedDecodedNumber(elemType, "__raw", elemChecks, where)
+        const checked = checkedDecodedNumber(elemType, "__raw", elemBridge, where)
         const truncates = checksOf(list, g).some(k => k.cause === "over-length" && k.policy === "truncate")
         if(checked === undefined && !truncates)
         {
@@ -331,7 +337,7 @@ function emitCheckedSeq(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext}>, g
     const elemType = (elemCorr?.localNode ?? requireEdge(listNode, 0, "WRITE_SEQ").target).type as IntegerType
     const c = `__c${g.tempCounter.n++}`
     b.line(`const ${c} = ${count};`)
-    if(elemChecks.length === 0 && !padsOnEncode(list, g))
+    if(!converts(elemBridge) && !padsOnEncode(list, g))
     {
         b.line(`for (let __k = 0; __k < ${c}; __k++) ${inDomain(access.elementAt(`v${list}`, "__k"), elemType.min, elemType.max, `invalid value at ${where}`)};`)
         b.line(`${translateExt(e, g, c)};`)
@@ -340,7 +346,7 @@ function emitCheckedSeq(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext}>, g
     b.block(`for (let __k = 0; __k < ${c}; __k++) {`, () =>
     {
         const y = encodedElement(list, "__k", g, b)
-        b.line(`write(ctx, ${e.iter}, ${e.width}, ${checkedEncodedNumber(elemType, y, elemChecks, where)});`)
+        b.line(`write(ctx, ${e.iter}, ${e.width}, ${checkedEncodedNumber(elemType, y, elemBridge, where)});`)
     })
     return true
 }
@@ -530,7 +536,7 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
         case "LOAD_VAL":
             {
                 const node = requireSlotNode(g.slotTypes, e.src, "LOAD_VAL")
-                const value = checkedEncodedNumber(localTypeOf(e.src, g) as IntegerType, `v${e.src}`, checksOf(e.src, g), pathOf(e.src, g))
+                const value = checkedEncodedNumber(localTypeOf(e.src, g) as IntegerType, `v${e.src}`, bridgeOf(e.src, g), pathOf(e.src, g))
                 return expectAccessor(localAccessorFor(e.src, g), "integer", node).toWire(value)
             }
 
@@ -754,7 +760,7 @@ function emitStoreVal(src: number, arg0: Expr<CodecExtInstr>, g: GenCtx, b: Line
     if(kindOf(node.type) !== SemanticTypeKinds.Integer) { emitWriteBack(src, raw, g, b); return }
     const t = node.type as IntegerType
     const access = expectAccessor(localAccessorFor(src, g), "integer", node)
-    const checked = checkedDecodedNumber(t, raw, checksOf(src, g), pathOf(src, g))
+    const checked = checkedDecodedNumber(t, raw, bridgeOf(src, g), pathOf(src, g))
     emitWriteBack(src, checked === undefined ? access.fromWire(raw, intWireSize(t), t.min < 0) : access.fromWire(checked, intWireSize(t), false), g, b)
 }
 

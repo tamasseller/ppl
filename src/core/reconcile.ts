@@ -51,7 +51,9 @@
 
 import type { TypeNode } from "./type-graph"
 import { SemanticTypeKinds, defaultValueOf, nameOf, policyHalves } from "./metamodel"
-import type { IntegerType, ListType, SemanticType, UnionType, Policy, OutOfDomainPolicy, UnknownVariantPolicy } from "./metamodel"
+import type { IntegerType, ListType, SemanticType, UnionType, Policy, OutOfDomainPolicy, UnknownVariantPolicy, InexactPolicy } from "./metamodel"
+import { affineTerms, between, evaluate, formatRational, isExact, round } from "./transform"
+import type { Transform } from "./transform"
 
 /** Which of the two ends of a codec a piece of generated/interpreted code
  *  is playing — encoding a local value onto the wire, or decoding wire
@@ -184,6 +186,12 @@ export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Corresponde
                 throw new Error(
                     `reconcile: meaning mismatch at ${path} — image is "${imageMeaning}", local is "${localMeaning}"`)
             }
+            const oneSided = imageMeaning === undefined ? localNode : localMeaning === undefined ? imageNode : undefined
+            if(oneSided !== undefined && (oneSided.type as IntegerType).toCanonical !== undefined)
+            {
+                throw new Error(
+                    `reconcile: only the ${oneSided === imageNode ? "image" : "local"} side declares a meaning at ${path}, so its toCanonical has nothing to convert to`)
+            }
         }
 
         const outcome = outcomeOf(imageNode, localNode)
@@ -217,7 +225,8 @@ export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Corresponde
 }
 
 export type Resolution =
-    | { readonly action: "bridge"; readonly checks?: readonly Check[] }
+    /** `transform` maps source numbering to destination numbering (§4.6). */
+    | { readonly action: "bridge"; readonly transform?: Transform; readonly checks?: readonly Check[] }
     | { readonly action: "drop" }
     | { readonly action: "default"; readonly value: unknown }
     /** §4.5's table: a combination the union's own selection mechanism
@@ -228,6 +237,7 @@ export type Resolution =
  *  a value that fails it (docs/reconciliation.md §2.5, §4.8). */
 export type Check =
     | { readonly cause: "out-of-domain"; readonly domain: readonly [number, number]; readonly policy: OutOfDomainPolicy }
+    | { readonly cause: "inexact"; readonly policy: InexactPolicy }
     | { readonly cause: "unknown-variant"; readonly policy: UnknownVariantPolicy }
     | { readonly cause: "over-length"; readonly maxLength: number; readonly policy: "trap" | "truncate" }
     | { readonly cause: "under-length"; readonly minLength: number; readonly policy: "trap" | "pad" }
@@ -315,17 +325,54 @@ export function classify(c: Correspondence, direction: Direction): Resolution
 function classifyInteger(c: Correspondence, image: IntegerType, local: IntegerType, direction: Direction): Resolution
 {
     const [src, dst] = direction === "decode" ? [image, local] : [local, image]
-    if(dst.min <= src.min && src.max <= dst.max) return { action: "bridge" }
-    if(src.max < dst.min || dst.max < src.min)
+    const transform = between(src.toCanonical, dst.toCanonical)
+    const checks: Check[] = []
+    let [lo, hi] = [src.min, src.max]
+
+    if(transform !== undefined)
+    {
+        const map = `${formatRational(transform.scale)}·x + ${formatRational(transform.offset)}`
+        let mode: InexactPolicy | undefined
+        if(!isExact(transform))
+        {
+            mode = policyFor(local.onInexact, direction)
+            if(mode === undefined)
+                throw new Error(`reconcile: ${direction} at ${c.path} converts by ${map}, which is inexact, and the local integer declares no onInexact for it`)
+            checks.push({ cause: "inexact", policy: mode })
+        }
+
+        const { mul, add, div } = affineTerms(transform)
+        const reach = [src.min, src.max].map(x => mul * BigInt(x) + add).reduce((m, n) => n < 0n ? (-n > m ? -n : m) : (n > m ? n : m), div)
+        if(reach > BigInt(Number.MAX_SAFE_INTEGER))
+            throw new Error(`reconcile: ${direction} at ${c.path} converts by ${map}, whose intermediates over ${src.min}..${src.max} reach ${reach}, past 2^53`)
+
+        const [a, b] = [evaluate(transform, src.min), evaluate(transform, src.max)].sort((x, y) => x.num * y.den < y.num * x.den ? -1 : 1)
+        lo = Number(round(a!, mode === undefined || mode === "trap" ? "ceil" : mode))
+        hi = Number(round(b!, mode === undefined || mode === "trap" ? "floor" : mode))
+    }
+
+    const bridge = (): Resolution => ({ action: "bridge", ...(transform !== undefined && { transform }), ...(checks.length > 0 && { checks }) })
+    if(dst.min <= lo && hi <= dst.max) return bridge()
+    if(hi < dst.min || dst.max < lo)
         throw new Error(`reconcile: no value fits both sides at ${c.path} — image is ${image.min}..${image.max}, local is ${local.min}..${local.max}`)
 
     const policy = policyFor(local.onOutOfDomain, direction)
     if(policy === undefined)
         throw new Error(`reconcile: ${direction} at ${c.path} can see values outside ${dst.min}..${dst.max} and the local integer declares no onOutOfDomain for it`)
-    if(typeof policy === "object" && (policy.replace < dst.min || dst.max < policy.replace))
-        throw new Error(`reconcile: onOutOfDomain replacement ${policy.replace} at ${c.path} is outside the image's ${dst.min}..${dst.max}`)
+    let bridged = policy
+    if(typeof policy === "object")
+    {
+        const r = direction === "encode" && transform !== undefined ? evaluate(transform, policy.replace) : undefined
+        if(r !== undefined && r.den !== 1n)
+            throw new Error(`reconcile: onOutOfDomain replacement ${policy.replace} at ${c.path} has no exact value in the image's numbering`)
+        const replace = r === undefined ? policy.replace : Number(r.num)
+        if(replace < dst.min || dst.max < replace)
+            throw new Error(`reconcile: onOutOfDomain replacement ${policy.replace} at ${c.path} is outside the image's ${dst.min}..${dst.max}`)
+        bridged = { replace }
+    }
 
-    return { action: "bridge", checks: [{ cause: "out-of-domain", domain: [dst.min, dst.max], policy }] }
+    checks.push({ cause: "out-of-domain", domain: [dst.min, dst.max], policy: bridged })
+    return bridge()
 }
 
 function classifyList(c: Correspondence, image: ListType, local: ListType, direction: Direction): Resolution

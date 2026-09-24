@@ -49,39 +49,6 @@ export const unitAsUndefinedRule: TsRule = tsRule(pUnit(),
     () => ({ deps: [] }),
     () => ({ kind: "unit", unitValue: () => "undefined" }))
 
-// ── Integer → bigint past Number's safe range ───────────────────────────
-
-/** A pair, not two independent rules — `wideIntegerRule`'s envelope
- *  (`-Infinity, Infinity`) alone would shadow the default `integerRule`
- *  for every integer, safe-range ones included. Compose both together,
- *  ahead of `tsTypeRules`: `[...bigIntEscalationRules, ...tsTypeRules]`.
- *  `safeIntegerRule`'s narrower envelope claims anything that actually
- *  fits `Number`'s safe range first; only what doesn't falls through to
- *  `wideIntegerRule`. */
-const safeIntegerRule: TsRule = tsRule(pInteger(Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER),
-    () => "number",
-    () => ({ deps: [] }),
-    () => ({ kind: "integer", fromWire: x => x, toWire: x => x }))
-
-// `BigInt(x)`/`Number(x)` — the wire-level bit width/sign-extension a
-// caller's `fromWire`/`toWire` receives is always already correct (image-
-// tree-driven, computed by codec-codegen before calling in), so this rule
-// only ever needs the last-mile host-representation conversion, never any
-// wire mechanics of its own.
-const wideIntegerRule: TsRule = tsRule(pInteger(-Infinity, Infinity),
-    () => "bigint",
-    () => ({ deps: [] }),
-    () => ({
-        kind: "integer",
-        // Sign-extension (mandatory wire correctness, same reasoning as
-        // the default integerRule) happens first, on the plain-number
-        // raw read, then the last-mile bigint conversion.
-        fromWire: (raw, width, signed) => `BigInt(${signed ? `signExtend(${width * 8}, ${raw})` : raw})`,
-        toWire: x => `Number(${x}) >>> 0`,
-    }))
-
-export const bigIntEscalationRules: readonly TsRule[] = [safeIntegerRule, wideIntegerRule]
-
 // ── List<byte> → Uint8Array, instead of number[] ────────────────────────
 
 /** For a field meant as raw bytes (matches the shape

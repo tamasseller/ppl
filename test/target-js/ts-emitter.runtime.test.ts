@@ -113,12 +113,12 @@ test("ts-emitter: a self-referential type projects without looping, referencing 
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
 test("ts-emitter: a caller's own rule ahead of tsTypeRules preempts the default for a specific shape", () => {
-    const bigIntRule = tsRule(pInteger(0, Number.MAX_SAFE_INTEGER),
+    const bigIntRule = tsRule(pInteger(0, 2 ** 32 - 1),
         () => "bigint",
         () => ({deps: []}),
         () => ({kind: "integer", fromWire: x => `BigInt(${x})`, toWire: x => `Number(${x})`}))
 
-    const T = struct({count: integer(0, Number.MAX_SAFE_INTEGER)})
+    const T = struct({count: integer(0, 2 ** 32 - 1)})
     const withOverride = projectTSTypes(T, [bigIntRule, ...tsTypeRules])
     assert.ok(withOverride.get(0)!.decl!.includes("count: bigint;"))
     assertCompiles(emitTSDeclarations(withOverride))

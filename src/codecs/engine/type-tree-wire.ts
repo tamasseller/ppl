@@ -30,6 +30,7 @@ import {
     i8,
     integer,
     list,
+    rational,
     struct,
     u16,
     u32,
@@ -37,6 +38,7 @@ import {
     union,
     unit,
 } from "../../core/index"
+import type { Rational } from "../../core/index"
 import { decodeLeb128, encodeLeb128 } from "mog-core"
 
 // ── Opcodes ──────────────────────────────────────────────────────────────
@@ -67,6 +69,7 @@ const MEANING = 0xD1
 const LIST_FIXED_EXT = 0xD2
 const LIST_RANGE_EXT = 0xD3
 const LIST_MIN_EXT = 0xD4
+const AFFINE = 0xD5
 
 /** Every canonical width `metamodel.ts` exports — none declares a default. */
 const CANONICAL: ReadonlyArray<readonly [number, IntegerType]> = [
@@ -92,6 +95,43 @@ function decodeSigned(bytes: Uint8Array, offset: number): { value: number; next:
 {
     const { value: zz, next } = decodeLeb128(bytes, offset)
     return { value: (zz >>> 1) ^ -(zz & 1), next }
+}
+
+// ── Rational (unbounded LEB128) ─────────────────────────────────────────
+
+function encodeBig(n: bigint): number[]
+{
+    const out: number[] = []
+    do
+    {
+        const low = Number(n & 0x7Fn)
+        n >>= 7n
+        out.push(n === 0n ? low : low | 0x80)
+    } while(n !== 0n)
+    return out
+}
+
+function decodeBig(bytes: Uint8Array, offset: number): { value: bigint; next: number }
+{
+    let value = 0n, shift = 0n, pos = offset
+    for(;;)
+    {
+        const b = bytes[pos++]!
+        value |= BigInt(b & 0x7F) << shift
+        shift += 7n
+        if((b & 0x80) === 0) return { value, next: pos }
+    }
+}
+
+const encodeRational = (r: Rational): number[] =>
+    [...encodeBig(r.num < 0n ? (-r.num << 1n) - 1n : r.num << 1n), ...encodeBig(r.den)]
+
+function decodeRational(bytes: Uint8Array, offset: number): { value: Rational; next: number }
+{
+    const zz = decodeBig(bytes, offset)
+    const den = decodeBig(bytes, zz.next)
+    const num = (zz.value & 1n) === 1n ? -((zz.value + 1n) >> 1n) : zz.value >> 1n
+    return { value: rational(num, den.value), next: den.next }
 }
 
 // ── Integer leaf ─────────────────────────────────────────────────────────
@@ -205,7 +245,11 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
         switch(t.kind)
         {
             case SemanticTypeKinds.Unit: return "u"
-            case SemanticTypeKinds.Integer: return `i:${t.min}:${t.max}:${t.default ?? "-"}:${t.meaning ?? "-"}`
+            case SemanticTypeKinds.Integer:
+            {
+                const f = t.toCanonical
+                return `i:${t.min}:${t.max}:${t.default ?? "-"}:${t.meaning ?? "-"}:${f === undefined ? "-" : `${f.scale.num}/${f.scale.den}+${f.offset.num}/${f.offset.den}`}`
+            }
             case SemanticTypeKinds.List: return `l:${t.minLength}:${t.maxLength ?? "-"}:${signatureOf(t.elementType)}`
             case SemanticTypeKinds.Struct:
                 return `s:${[...t.fields.entries()].map(([k, v]) => `${k}=${signatureOf(v)}`).join(",")}`
@@ -231,6 +275,12 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
             case SemanticTypeKinds.Unit: instructions.push(PUSH_UNIT); break
             case SemanticTypeKinds.Integer:
             {
+                if(t.toCanonical !== undefined)
+                {
+                    encodeNode(integer(t.min, t.max, {default: t.default, meaning: t.meaning}))
+                    instructions.push(AFFINE, ...encodeRational(t.toCanonical.scale), ...encodeRational(t.toCanonical.offset))
+                    break
+                }
                 if(t.meaning === undefined)
                 {
                     instructions.push(...encodeInteger(t))
@@ -448,6 +498,16 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                 const base = derefType(stack.pop()!)
                 if(base.kind !== SemanticTypeKinds.Integer) throw new Error(`decodeTypeTree: MEANING applied to a ${base.kind}`)
                 push(integer(base.min, base.max, {default: base.default, meaning: names[idxR.value]!}))
+                break
+            }
+            case AFFINE:
+            {
+                const scale = decodeRational(bytes, pos)
+                const offset = decodeRational(bytes, scale.next)
+                pos = offset.next
+                const base = derefType(stack.pop()!)
+                if(base.kind !== SemanticTypeKinds.Integer) throw new Error(`decodeTypeTree: AFFINE applied to a ${base.kind}`)
+                push(integer(base.min, base.max, {default: base.default, meaning: base.meaning, toCanonical: {op: "affine", scale: scale.value, offset: offset.value}}))
                 break
             }
             case END:

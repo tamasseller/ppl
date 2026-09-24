@@ -60,8 +60,7 @@ export function intWireSize(t: {min: number, max: number}): number
     const range = t.max - t.min
     if(range <= 0xFF) return 1
     if(range <= 0xFFFF) return 2
-    if(range <= 0xFFFFFFFF) return 4
-    return 8
+    return 4
 }
 
 /**

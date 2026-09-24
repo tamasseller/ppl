@@ -70,6 +70,28 @@ export function orReplace<T extends number | bigint>(v: T, min: number, max: num
     return v >= min && v <= max ? v : replacement
 }
 
+/** `n / d` rounded per `mode`, `d > 0`. Exact while `|n|` and `d` are safe integers. */
+export function divRound(n: number, d: number, mode: "trap" | "nearest-even" | "floor" | "ceil" | "toward-zero", what: string): number
+{
+    const r = n % d
+    const q = (n - r) / d
+    if(r === 0) return q
+    switch(mode)
+    {
+        case "trap": throw new CodecTrap(-1, `${what}: ${n}/${d} is not an integer`)
+        case "toward-zero": return q
+        case "floor": return r < 0 ? q - 1 : q
+        case "ceil": return r > 0 ? q + 1 : q
+        case "nearest-even":
+        {
+            const away = r < 0 ? q - 1 : q + 1
+            const twice = 2 * Math.abs(r)
+            if(twice !== d) return twice > d ? away : q
+            return q % 2 === 0 ? q : away
+        }
+    }
+}
+
 // ── The byte stream ─────────────────────────────────────────────────────
 
 export interface Iter { pos: number; capability: "read" | "write"; overwriteOnly: boolean }
@@ -131,17 +153,7 @@ function ensureCapacity(ctx: Ctx, upTo: number): void
     ctx.buffer = grown
 }
 
-/** Every wire width `intWireSize` (`codecs`) ever produces is 1, 2,
- *  4, or 8 — the three common cases go straight through `DataView`
- *  (little-endian, matching this module's own byte order throughout);
- *  8 (and, defensively, anything else) falls back to the same manual
- *  per-byte loop this module always used — `DataView.getBigUint64`
- *  would be the genuinely correct 8-byte read, but the value crossing
- *  this boundary is a plain `number` throughout the rest of this module
- *  (an `Accessor.fromWire`/`toWire` already narrowed it, e.g.
- *  `wideIntegerRule`'s own `Number(x) >>> 0` on the way in), so nothing
- *  downstream could use the extra precision anyway; unchanged from this
- *  module's own pre-existing behavior, not a new gap this rework opens. */
+/** Little-endian; any width other than 1, 2 or 4 takes the byte loop. Values are 32-bit. */
 function readBytes(dv: DataView, buffer: Uint8Array, pos: number, width: number): number
 {
     if(width === 1)
@@ -288,8 +300,7 @@ export function seek(ctx: Ctx, iterIdx: number, delta: number): void
  *  number — two's-complement, mandatory wire-correctness (not a
  *  representation choice an `Accessor` gets to opt out of): a raw wire
  *  read is always unsigned bits; a signed integer type's own `fromWire`
- *  (`ts-emitter.ts`'s `integerRule`, and any alternative like
- *  `bigIntEscalationRules`) calls this to recover the real host value
+ *  (`ts-emitter.ts`'s `integerRule`, and any alternative) calls this to recover the real host value
  *  before doing anything representation-specific of its own. */
 export function signExtend(bits: number, raw: number): number
 {

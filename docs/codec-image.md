@@ -129,7 +129,8 @@ per-node recurrence to exploit here, so a byte per tag is already at floor.
 | `0xD2` | `LIST_FIXED_EXT` | length: LEB128; `minLength = maxLength` |
 | `0xD3` | `LIST_RANGE_EXT` | minLength, maxLength: LEB128 |
 | `0xD4` | `LIST_MIN_EXT` | minLength: LEB128; unbounded |
-| `0xD5`-`0xFF` | reserved | |
+| `0xD5` | `AFFINE` | scale, offset: each a zigzag-LEB128 numerator then a LEB128 denominator, unbounded; pops a meaningful integer, pushes it with `toCanonical` |
+| `0xD6`-`0xFF` | reserved | |
 
 Four integer forms rather than one general form: no default is the common
 case (reconciliation.md §2.4: only a field added after its peers declares
@@ -144,6 +145,10 @@ default takes a `DEF` form, never a canonical tag.
 integer form fits, rather than a flag doubling the four forms: most integers
 carry none. `MEANING` is a construction of its own (§3.4), so the plain
 integer beneath it stays reachable by `PUSH_REF` too.
+
+`toCanonical` (reconciliation.md §2.3) is a further `AFFINE` postfix after
+`MEANING`, a construction of its own for the same reason. Its operands are
+unbounded: NTP's epoch offset, -2208988800, already outgrows 32 bits.
 
 Encode is a bare postorder walk, no bookkeeping beyond §3.4's:
 

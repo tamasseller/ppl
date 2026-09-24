@@ -5,8 +5,8 @@
  * `codec-codegen.runtime.test.ts` proves the default representation
  * round-trips correctly; this file proves the actual point of the
  * accessor-driven rework — that swapping in an alternative `TsRule`
- * (structAsClassRule/unionAsClassHierarchyRule/byteListAsUint8ArrayRule/
- * bigIntEscalationRules) changes what the *compiled codec* actually
+ * (structAsClassRule/unionAsClassHierarchyRule/byteListAsUint8ArrayRule)
+ * changes what the *compiled codec* actually
  * produces to match, not just what the declared TS type claims. Before
  * this rework, using any of these with the compiled path was a documented
  * lie (`ts-alternative-rules.ts`'s own doc comments on the class rules) —
@@ -24,7 +24,7 @@ import type { TsRule } from "../../src/target-js/engine/resolver"
 import { tsRule } from "../../src/target-js/engine/resolver"
 import { tsTypeRules } from "../../src/target-js/components/ts-emitter"
 import {
-    structAsClassRule, unionAsClassHierarchyRule, byteListAsUint8ArrayRule, bigIntEscalationRules,
+    structAsClassRule, unionAsClassHierarchyRule, byteListAsUint8ArrayRule,
     capacityOneListAsOptionalRule, int16ListAsInt16ArrayRule,
 } from "../../src/target-js/components/ts-alternative-rules"
 import { generateCodecModule } from "../../src/target-js/engine/codec-module"
@@ -94,25 +94,6 @@ describe("codec-codegen — alternative representations actually round-trip thro
         const decoded = decode(encode(Uint8Array.from([1, 2, 3, 255])))
         assert.ok(decoded instanceof Uint8Array, "decoded value isn't a real Uint8Array")
         assert.deepEqual(Array.from(decoded), [1, 2, 3, 255])
-    })
-
-    test("bigIntEscalationRules: an out-of-safe-range integer decodes to a real bigint", () =>
-    {
-        // Just past Number.MAX_SAFE_INTEGER — safeIntegerRule's own
-        // envelope (pInteger(MIN_SAFE_INTEGER, MAX_SAFE_INTEGER)) no
-        // longer fully contains this range, so it falls through to
-        // wideIntegerRule. A small value keeps this within what the
-        // wire-level read/write byte loop (plain JS number bitwise ops,
-        // 32-bit) can actually move correctly — this test is about
-        // wideIntegerRule's own fromWire/toWire conversion actually being
-        // wired in, not about the separate, pre-existing question of
-        // exact 64-bit wire correctness for a value that needs every bit.
-        const T = named("Wide", struct({ n: integer(0, Number.MAX_SAFE_INTEGER + 1) }))
-        const { encode, decode } = loadCompiled(T, "Wide", [...bigIntEscalationRules, ...tsTypeRules])
-
-        const decoded = decode(encode({ n: 123456789n }))
-        assert.equal(typeof decoded.n, "bigint", "decoded value isn't a real bigint")
-        assert.equal(decoded.n, 123456789n)
     })
 
     test("capacityOneListAsOptionalRule: WRITE_SEQ/READ_SEQ bulk transfer through the T|null special case", () =>
