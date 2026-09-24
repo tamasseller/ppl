@@ -26,16 +26,9 @@ export interface IntegerType
     kind: SemanticTypeKinds.Integer
     min: number
     max: number
-    /** Value a decoder/encoder substitutes when this field/variant has no
-     *  source value of its own on one side of a reconciled pair of trees
-     *  (docs/reconciliation.md §4.4). Always concrete — every integer
-     *  has a default, `0` unless the constructor was given one. A field
-     *  needing a non-zero default doesn't reuse a shared constant like
-     *  `u8`; it constructs its own `integer(min, max, {default: d})`
-     *  value, which is already a distinct `TypeNode`
-     *  (type-graph.ts's sharing is keyed by object identity, not
-     *  structure) — no separate per-slot default record is needed. */
-    default: number
+    /** Substituted when this slot exists on one side only
+     *  (docs/reconciliation.md §2.4). Absent: the slot is required. */
+    default?: number
 }
 
 export interface ListType
@@ -92,7 +85,11 @@ export interface IntegerOptions
 }
 
 export const integer = (min: number, max: number, opts: IntegerOptions = {}): IntegerType =>
-    ({kind: SemanticTypeKinds.Integer, min, max, default: opts.default ?? 0})
+{
+    if(opts.default !== undefined && (opts.default < min || max < opts.default))
+        throw new Error(`integer: default ${opts.default} is outside ${min}..${max}`)
+    return {kind: SemanticTypeKinds.Integer, min, max, default: opts.default}
+}
 
 // `2 ** n`, not `1 << n`: JS's `<<` operates on signed 32-bit ints (shift
 // amount mod 32, result sign-interpreted), which silently breaks exactly
@@ -166,8 +163,8 @@ export const optional = (T: SemanticType): UnionType => union({value: T, empty: 
  * and `{variant: defaultVariant, value: undefined}` for a union that
  * declared one.
  *
- * Throws if a union with no declared `defaultVariant` is reached — a
- * type-tree author who never needs this union's default (e.g. it's never
+ * Throws if an integer with no `default`, or a union with no declared
+ * `defaultVariant`, is reached — a type-tree author who never needs its default (e.g. it's never
  * the type of a field only one side of a reconciled pair declares) never
  * has to declare one; the failure only surfaces once this is actually
  * asked for, which docs/reconciliation.md §2.4 fixes as a build/codegen-time
@@ -203,7 +200,10 @@ export function defaultValueOf(t: SemanticType): unknown
     switch(c.kind)
     {
         case SemanticTypeKinds.Unit:    return undefined
-        case SemanticTypeKinds.Integer: return c.default
+        case SemanticTypeKinds.Integer:
+            if(c.default === undefined)
+                throw new Error("defaultValueOf: integer has no declared default")
+            return c.default
         case SemanticTypeKinds.List:    return []
         case SemanticTypeKinds.Struct:
             return Object.fromEntries([...c.fields.entries()].map(([name, type]) => [name, defaultValueOf(type)]))

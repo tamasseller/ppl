@@ -69,7 +69,7 @@ describe("type tree wire — leaves", () =>
 {
     test("unit", () => { roundTrip(unit) })
 
-    test("every canonical width costs exactly one tag byte, no operands", () =>
+    test("every canonical width with no default costs exactly one tag byte, no operands", () =>
     {
         for(const [t, tag] of [[u8, 0xC1], [i8, 0xC2], [u16, 0xC3], [i16, 0xC4], [u32, 0xC5], [i32, 0xC6]] as const)
         {
@@ -79,25 +79,34 @@ describe("type tree wire — leaves", () =>
         }
     })
 
-    test("min=0, default=0 custom range uses the 1-operand extended form", () =>
+    test("a canonical range with a default is not a canonical tag", () =>
+    {
+        const { bytes } = roundTrip(integer(0, 255, {default: 0}))
+        assert.deepEqual([...bytes], [0, 0xC8, ...[0xFF, 0x01], 0, 0xD0]) // max=255, default=0
+    })
+
+    test("min=0, no default uses the 1-operand extended form", () =>
     {
         const { bytes } = roundTrip(integer(0, 1000))
         assert.deepEqual([...bytes], [0, 0xC7, ...[0xE8, 0x07], 0xD0]) // max=1000 LEB128
     })
 
-    test("min=0, non-zero default uses the 2-operand extended form", () =>
+    test("min=0 with a default uses the 2-operand extended form", () =>
     {
-        roundTrip(integer(0, 1000, {default: 7}))
+        const { bytes } = roundTrip(integer(0, 1000, {default: 7}))
+        assert.deepEqual([...bytes], [0, 0xC8, ...[0xE8, 0x07], 14, 0xD0]) // default=7 zigzag
     })
 
-    test("default=0, non-zero min uses the 2-operand (min,max) extended form", () =>
+    test("non-zero min, no default uses the 2-operand (min,max) extended form", () =>
     {
-        roundTrip(integer(-40, 125))
+        const { bytes } = roundTrip(integer(-40, 125))
+        assert.deepEqual([...bytes], [0, 0xC9, 79, ...[0xFA, 0x01], 0xD0]) // min=-40, max=125 zigzag
     })
 
-    test("arbitrary min/max/default uses the fully general extended form", () =>
+    test("non-zero min with a default uses the fully general extended form", () =>
     {
-        roundTrip(integer(-40, 125, {default: 20}))
+        const { bytes } = roundTrip(integer(-40, 125, {default: 20}))
+        assert.deepEqual([...bytes], [0, 0xCA, 79, ...[0xFA, 0x01], 40, 0xD0])
     })
 
     test("negative min/max/default round-trip correctly (zigzag sign)", () =>

@@ -53,10 +53,10 @@ const PUSH_U16 = 0xC3
 const PUSH_I16 = 0xC4
 const PUSH_U32 = 0xC5
 const PUSH_I32 = 0xC6
-const PUSH_INT_MIN0_D0_EXT = 0xC7
-const PUSH_INT_MIN0_EXT = 0xC8
-const PUSH_INT_D0_EXT = 0xC9
-const PUSH_INT_EXT = 0xCA
+const PUSH_INT_MIN0_EXT = 0xC7
+const PUSH_INT_MIN0_DEF_EXT = 0xC8
+const PUSH_INT_EXT = 0xC9
+const PUSH_INT_DEF_EXT = 0xCA
 const LIST_OP = 0xCB
 const LIST_EXT = 0xCC
 const STRUCT_EXT = 0xCD
@@ -64,7 +64,7 @@ const UNION_EXT = 0xCE
 const PUSH_REF_EXT = 0xCF
 const END = 0xD0
 
-/** Every canonical width `metamodel.ts` exports — all `default = 0`. */
+/** Every canonical width `metamodel.ts` exports — none declares a default. */
 const CANONICAL: ReadonlyArray<readonly [number, IntegerType]> = [
     [PUSH_U8, u8], [PUSH_I8, i8], [PUSH_U16, u16], [PUSH_I16, i16], [PUSH_U32, u32], [PUSH_I32, i32],
 ]
@@ -94,13 +94,17 @@ function decodeSigned(bytes: Uint8Array, offset: number): { value: number; next:
 
 function encodeInteger(t: IntegerType): number[]
 {
-    for(const [tag, canon] of CANONICAL)
-        if(t.min === canon.min && t.max === canon.max && t.default === 0) return [tag]
+    if(t.default === undefined)
+    {
+        for(const [tag, canon] of CANONICAL)
+            if(t.min === canon.min && t.max === canon.max) return [tag]
 
-    if(t.min === 0 && t.default === 0) return [PUSH_INT_MIN0_D0_EXT, ...encodeLeb128(t.max)]
-    if(t.min === 0) return [PUSH_INT_MIN0_EXT, ...encodeLeb128(t.max), ...encodeSigned(t.default)]
-    if(t.default === 0) return [PUSH_INT_D0_EXT, ...encodeSigned(t.min), ...encodeSigned(t.max)]
-    return [PUSH_INT_EXT, ...encodeSigned(t.min), ...encodeSigned(t.max), ...encodeSigned(t.default)]
+        if(t.min === 0) return [PUSH_INT_MIN0_EXT, ...encodeLeb128(t.max)]
+        return [PUSH_INT_EXT, ...encodeSigned(t.min), ...encodeSigned(t.max)]
+    }
+
+    if(t.min === 0) return [PUSH_INT_MIN0_DEF_EXT, ...encodeLeb128(t.max), ...encodeSigned(t.default)]
+    return [PUSH_INT_DEF_EXT, ...encodeSigned(t.min), ...encodeSigned(t.max), ...encodeSigned(t.default)]
 }
 
 // ── String table + name specification (§3.3) ────────────────────────────
@@ -186,7 +190,7 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
         switch(t.kind)
         {
             case SemanticTypeKinds.Unit: return "u"
-            case SemanticTypeKinds.Integer: return `i:${t.min}:${t.max}:${t.default}`
+            case SemanticTypeKinds.Integer: return `i:${t.min}:${t.max}:${t.default ?? "-"}`
             case SemanticTypeKinds.List: return `l:${t.capacity ?? "-"}:${signatureOf(t.elementType)}`
             case SemanticTypeKinds.Struct:
                 return `s:${[...t.fields.entries()].map(([k, v]) => `${k}=${signatureOf(v)}`).join(",")}`
@@ -323,13 +327,13 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
             case PUSH_I16: push(i16); break
             case PUSH_U32: push(u32); break
             case PUSH_I32: push(i32); break
-            case PUSH_INT_MIN0_D0_EXT:
+            case PUSH_INT_MIN0_EXT:
             {
                 const maxR = decodeLeb128(bytes, pos); pos = maxR.next
-                push(integer(0, maxR.value, {default: 0}))
+                push(integer(0, maxR.value))
                 break
             }
-            case PUSH_INT_MIN0_EXT:
+            case PUSH_INT_MIN0_DEF_EXT:
             {
                 const maxR = decodeLeb128(bytes, pos)
                 const defR = decodeSigned(bytes, maxR.next)
@@ -337,15 +341,15 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
                 push(integer(0, maxR.value, {default: defR.value}))
                 break
             }
-            case PUSH_INT_D0_EXT:
+            case PUSH_INT_EXT:
             {
                 const minR = decodeSigned(bytes, pos)
                 const maxR = decodeSigned(bytes, minR.next)
                 pos = maxR.next
-                push(integer(minR.value, maxR.value, {default: 0}))
+                push(integer(minR.value, maxR.value))
                 break
             }
-            case PUSH_INT_EXT:
+            case PUSH_INT_DEF_EXT:
             {
                 const minR = decodeSigned(bytes, pos)
                 const maxR = decodeSigned(bytes, minR.next)

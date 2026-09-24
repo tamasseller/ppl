@@ -1,7 +1,7 @@
 # Reconciliation
 
 > **Status:** partly implemented.
-> - Implemented: options-object constructors (§2.2), name matching (§4.1), `reconcile` and `resolve` (§4.2), kind mismatch (§4.3), struct fields (§4.4), union variants (§4.5) with `defaultVariant` covering both causes, declared defaults (§2.4). `src/core/reconcile.ts`, `src/target-js/engine/bridging-codec-module.ts`.
+> - Implemented: options-object constructors (§2.2), optional domain-checked defaults (§2.4), name matching (§4.1), `reconcile` and `resolve` (§4.2), kind mismatch (§4.3), struct fields (§4.4), union variants (§4.5) with `defaultVariant` covering both causes. `src/core/reconcile.ts`, `src/target-js/engine/bridging-codec-module.ts`.
 > - Not implemented: `classify` (§4.2), validation seams (§5.2), integer domains (§4.6), list length domains (§4.7), policies (§2.5), `meaning` and transforms (§2.1–§2.3), text (§2.6), their image encoding (§3.1).
 > - Today a matched integer or list always bridges unchecked. Staging is §7.
 
@@ -131,7 +131,6 @@ The value for a slot the other side does not have. Owned by whichever tree has t
 - A default needed by §4.4 and not declared is a build error when the trees are reconciled. Which defaults are needed is known then.
 - A field without a default is therefore required, in both directions: a peer lacking it cannot decode into this tree, and cannot encode against an image carrying it.
 - Authoring rule: declare the default when the field is added (Avro's convention), unless the field is meant to be required.
-- Today `integer()` defaults `default` to `0` and never checks it against `min..max`.
 
 ### 2.5 Policies
 
@@ -173,7 +172,6 @@ A string is `list(integer)`; the element's `meaning` is `text:codepoint`, canoni
 - Encoder and decoder programs as the origin compiled them; reconciliation never rewrites them.
 - Proposed encoding, in codec-image.md §3.2's integer push instructions, folded into the tag the way `min = 0` and `default = 0` fold:
   - `meaning`: an index into codec-image.md §3.3's string table.
-  - Optional `default`: the `default = 0` folds become "no default" folds, and the canonical `PUSH_U8`… tags carry none.
   - Transform: a tag byte and operands. Rational is zigzag-LEB128 numerator, LEB128 denominator.
   - `table`s are interned in a table of their own, indexed like strings. A code page is 256 points and shared by construction.
   - `LIST_EXT` carries both length bounds, with folds for `minLength = 0` and for a fixed length.
@@ -362,7 +360,7 @@ Each stage carries its own image encoding change, and its tests: classification 
 
 1. Done: §4.1, §4.2's `reconcile` and `resolve`, §4.4, §4.5 via `defaultVariant`, §2.4.
 2. Done: options-object constructors (§2.2).
-3. Optional, domain-checked `default` (§2.4), with its "no default" encoding (§3.1). Every schema relying on the implicit `0`, `ppl-example`'s included, must declare it.
+3. Done: optional, domain-checked `default` (§2.4); codec-image.md §3.2's integer forms fold "no default".
 4. Domains and policies, as one step:
    - `classify` (§4.2) and §4.8's `Resolution`.
    - Integer domains with identity numbering (§4.6 without `meaning`), `onOutOfDomain`.

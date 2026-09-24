@@ -181,7 +181,9 @@ function emitDefaultValue(node: TypeNode, accessorOf: (n: TypeNode) => Accessor,
 
         case "integer":
         {
-            const intType = node.type as {min: number; max: number; default: number}
+            const intType = node.type as {min: number; max: number; default?: number}
+            if(intType.default === undefined)
+                throw new Error(`codec-codegen: default value needed for ${describeType(node)}, but it declares none`)
             return access.fromWire(String(intType.default), intWireSize(intType), intType.min < 0)
         }
 

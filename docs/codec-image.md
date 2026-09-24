@@ -114,11 +114,11 @@ per-node recurrence to exploit here, so a byte per tag is already at floor.
 | byte | instruction | operands |
 |---|---|---|
 | `0xC0` | `PUSH_UNIT` | none |
-| `0xC1`-`0xC6` | `PUSH_U8` / `I8` / `U16` / `I16` / `U32` / `I32` | none; covers every constant `metamodel.ts` exports |
-| `0xC7` | `PUSH_INT_MIN0_D0_EXT` | max (zigzag-LEB128); `min = 0`, `default = 0` |
-| `0xC8` | `PUSH_INT_MIN0_EXT` | max, default; `min = 0` |
-| `0xC9` | `PUSH_INT_D0_EXT` | min, max; `default = 0` |
-| `0xCA` | `PUSH_INT_EXT` | min, max, default: the fully general case |
+| `0xC1`-`0xC6` | `PUSH_U8` / `I8` / `U16` / `I16` / `U32` / `I32` | none; covers every constant `metamodel.ts` exports, none of which declares a default |
+| `0xC7` | `PUSH_INT_MIN0_EXT` | max (LEB128); `min = 0`, no default |
+| `0xC8` | `PUSH_INT_MIN0_DEF_EXT` | max, default (zigzag-LEB128); `min = 0` |
+| `0xC9` | `PUSH_INT_EXT` | min, max (zigzag-LEB128); no default |
+| `0xCA` | `PUSH_INT_DEF_EXT` | min, max, default: the fully general case |
 | `0xCB` | `LIST` | none (uncapacitated) |
 | `0xCC` | `LIST_EXT` | capacity: LEB128 |
 | `0xCD` | `STRUCT_EXT` | fieldCount: LEB128, then a name specification (§3.3) |
@@ -127,15 +127,14 @@ per-node recurrence to exploit here, so a byte per tag is already at floor.
 | `0xD0` | `END` | none; pop the one remaining value (which must be the only one left) as the root type, section over |
 | `0xD1`-`0xFF` | reserved | |
 
-Four integer forms rather than one general form: `default = 0` is the
-common case even for a non-canonical range (reconciliation.md §2.4's
-declare-at-point-of-need discipline means most fields never override it),
-and `min = 0` covers most
-non-canonical ranges anyway (an arbitrary-width unsigned count or
-percentage, not just the six canonical widths). Both fold independently, so
-all four combinations get their own tag rather than paying for operands the
-common cases don't need, the same move `wire.ts` makes for the codec
-opcodes.
+Four integer forms rather than one general form: no default is the common
+case (reconciliation.md §2.4: only a field added after its peers declares
+one), and `min = 0` covers most non-canonical ranges anyway (an
+arbitrary-width unsigned count or percentage, not just the six canonical
+widths). Both fold independently, so all four combinations get their own
+tag rather than paying for operands the common cases don't need, the same
+move `wire.ts` makes for the codec opcodes. A canonical range with a
+default takes a `DEF` form, never a canonical tag.
 
 Encode is a bare postorder walk, no bookkeeping beyond §3.4's:
 
@@ -143,8 +142,8 @@ Encode is a bare postorder walk, no bookkeeping beyond §3.4's:
 encode(node):
     switch(node.type.kind)
         unit:    emit PUSH_UNIT
-        integer: emit canonical PUSH_*, or whichever PUSH_INT_*EXT
-                 fits (min=0? default=0? both? neither?)
+        integer: emit canonical PUSH_* if no default, else whichever
+                 PUSH_INT_*EXT fits (min=0? default? both? neither?)
         list:    encode(elementType); emit LIST or LIST_EXT(capacity)
         struct:  for each field:   encode(child)
                  emit STRUCT(N, nameSpec) or, if N ≥ 64,

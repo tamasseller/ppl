@@ -85,6 +85,23 @@ describe("bridging: struct, image-only field (§4.4)", () =>
     })
 })
 
+describe("bridging: a field with no default is required (§2.4)", () =>
+{
+    test("an image-only field with no default fails codegen, not a message", () =>
+    {
+        const Image = named("Widget", struct({ a: u8, extra: u8 }))
+        const Local = named("Widget", struct({ a: u8 }))
+        assert.throws(() => generateBridgingCodecModule({ name: "Widget", image: imageOf(Image), localType: Local }), /no declared default|declares none/)
+    })
+
+    test("a local-only field with no default fails codegen, not a message", () =>
+    {
+        const Image = named("Widget", struct({ a: u8 }))
+        const Local = named("Widget", struct({ a: u8, extra: u8 }))
+        assert.throws(() => generateBridgingCodecModule({ name: "Widget", image: imageOf(Image), localType: Local }), /no declared default|declares none/)
+    })
+})
+
 describe("bridging: struct, local-only field (§4.4)", () =>
 {
     const Image = named("Widget", struct({ a: u8 }))

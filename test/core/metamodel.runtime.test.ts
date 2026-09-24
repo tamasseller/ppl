@@ -12,20 +12,26 @@ import {defaultValueOf, i8, integer, list, named, nameOf, optional, struct, u8, 
 import {buildTypeGraph, child} from "../../src/core/type-graph"
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
-// integer: default defaults to 0, the `default` option overrides it
+// integer: default is optional and must lie in min..max
 ////////////////////////////////////////////////////////////////////////////////////////////////
 
-test("integer: default is 0 when omitted", () => {
-    assert.equal(integer(0, 255).default, 0)
+test("integer: default is absent when omitted", () => {
+    assert.equal(integer(0, 255).default, undefined)
 })
 
 test("integer: the `default` option sets an explicit default", () => {
     assert.equal(integer(0, 255, {default: 7}).default, 7)
 })
 
-test("integer: shared range constants (u8/i8) default to 0", () => {
-    assert.equal(u8.default, 0)
-    assert.equal(i8.default, 0)
+test("integer: a default outside min..max throws", () => {
+    assert.throws(() => integer(10, 20, {default: 0}))
+    assert.throws(() => integer(10, 20, {default: 21}))
+    assert.equal(integer(10, 20, {default: 20}).default, 20)
+})
+
+test("integer: shared range constants (u8/i8) declare no default", () => {
+    assert.equal(u8.default, undefined)
+    assert.equal(i8.default, undefined)
 })
 
 ////////////////////////////////////////////////////////////////////////////////////////////////
@@ -77,8 +83,12 @@ test("defaultValueOf: unit is undefined", () => {
 })
 
 test("defaultValueOf: integer is its own declared default", () => {
-    assert.equal(defaultValueOf(integer(0, 255)), 0)
     assert.equal(defaultValueOf(integer(0, 255, {default: 42})), 42)
+})
+
+test("defaultValueOf: integer with no default throws", () => {
+    assert.throws(() => defaultValueOf(integer(0, 255)))
+    assert.throws(() => defaultValueOf(struct({a: integer(0, 255, {default: 1}), b: u8})))
 })
 
 test("defaultValueOf: list is always empty, regardless of element type", () => {
@@ -88,7 +98,7 @@ test("defaultValueOf: list is always empty, regardless of element type", () => {
 
 test("defaultValueOf: struct composes its own fields' defaults recursively", () => {
     const T = struct({
-        id: u8,
+        id: integer(0, 255, {default: 0}),
         quality: integer(0, 255, {default: 7}),
         nested: struct({flag: unit, count: integer(0, 100, {default: 3})}),
     })
@@ -111,13 +121,13 @@ test("defaultValueOf: union with no declared defaultVariant throws", () => {
 
 test("defaultValueOf: struct field of a union type with no default composes to a throw", () => {
     const NoDefault = union({temperature: integer(-40, 125), humidity: integer(0, 100)})
-    const T = struct({id: u8, kind: NoDefault})
+    const T = struct({id: integer(0, 255, {default: 0}), kind: NoDefault})
     assert.throws(() => defaultValueOf(T))
 })
 
 test("defaultValueOf: struct field of a union type WITH a default composes cleanly", () => {
     const WithDefault = union({temperature: integer(-40, 125), unrecognized: unit}, "unrecognized")
-    const T = struct({id: u8, kind: WithDefault})
+    const T = struct({id: integer(0, 255, {default: 0}), kind: WithDefault})
     assert.deepEqual(defaultValueOf(T), {id: 0, kind: {variant: "unrecognized", value: undefined}})
 })
 

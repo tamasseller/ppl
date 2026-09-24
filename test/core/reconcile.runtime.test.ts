@@ -202,6 +202,14 @@ describe("resolve(): struct field — all four cells are real (§4.4 table)", ()
         assert.deepEqual(resolve(c, edgeOf(c, "extra"), "encode"), { action: "drop" })
     })
 
+    test("a needed default that isn't declared throws, either side", () =>
+    {
+        const imageOnly = reconcile(root(struct({ extra: u8 })), root(struct({})))
+        assert.throws(() => resolve(imageOnly, edgeOf(imageOnly, "extra"), "encode"), /no declared default/)
+        const localOnly = reconcile(root(struct({})), root(struct({ extra: u8 })))
+        assert.throws(() => resolve(localOnly, edgeOf(localOnly, "extra"), "decode"), /no declared default/)
+    })
+
     test("matched field → bridge, both directions", () =>
     {
         const c = reconcile(root(struct({ a: u8 })), root(struct({ a: u8 })))
