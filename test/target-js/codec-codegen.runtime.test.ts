@@ -15,7 +15,8 @@ import * as assert from "node:assert/strict"
 import type { SemanticType } from "../../src/core/index"
 import { struct, union, unit, list, u8, integer, named, optional, buildTypeGraph, kindOf, SemanticTypeKinds, pStructFields, pStar, pInteger } from "../../src/core/index"
 import { run, validateProgram, ir } from "mog-core"
-import { buildCodec, binaryEncodeRules, binaryDecodeRules, createCodecExtension, codecRule } from "../../src/codecs/index"
+import { buildCodec, binaryEncodeRules, binaryDecodeRules, createCodecExtension, codecRule, PAST_END_TRAP } from "../../src/codecs/index"
+import type { CodecTrap } from "../../src/target-js/runtime/codec-runtime"
 
 import { generateCodecModule } from "../../src/target-js/engine/codec-module"
 import { loadGenerated } from "./load-generated"
@@ -189,7 +190,7 @@ describe("codec-codegen — fork frames match the reference VM (codec-extension.
            call_codec(${resolve(u8, undefined)}, 0, 0);
            write(1, 1, 99);`)
     const calleeClonesItsOwn = codecRule(pInteger(-Infinity, Infinity), (_m, _c: void) =>
-        ir`write(0, 1, load_val(0)); clone_rd(0, 1); u32 s = 0; s = read(1, 1);`)
+        ir`clone_rd(0, 1); write(0, 1, load_val(0)); u32 s = 0; s = read(1, 1);`)
 
     test("a caller's parked fork survives the callee's own clone of the same id", () =>
     {
@@ -218,5 +219,26 @@ describe("codec-codegen — fork frames match the reference VM (codec-extension.
             decodeProgram: buildCodec(T, binaryDecodeRules, undefined),
         })
         assert.ok(!source.includes("pushForks(ctx)"))
+    })
+})
+
+describe("codec-codegen — a read past the stream's end traps alike in both paths", () =>
+{
+    test("every truncation of a valid input traps with PAST_END_TRAP, interpreted and compiled", () =>
+    {
+        const T = struct({ a: u8, b: integer(0, 65535), items: list(u8) })
+        const value = { a: 1, b: 0x1234, items: [5, 6, 7] }
+        const bytes = interpretedEncode(T, value)
+        const { decode } = loadCompiled(T, "Truncated")
+        const program = buildCodec(T, binaryDecodeRules, undefined)
+        const graph = buildTypeGraph(T)
+
+        for(let cut = 0; cut < bytes.length; cut++)
+        {
+            const ext = createCodecExtension("decode", { container: { root: {} }, key: "root", type: graph.root }, bytes.slice(0, cut))
+            assert.equal(run(program, ext).trapCode, PAST_END_TRAP, `interpreted, cut ${cut}`)
+            assert.throws(() => decode(Uint8Array.from(bytes.slice(0, cut))),
+                (e: unknown) => e instanceof Error && e.name === "CodecTrap" && (e as CodecTrap).code === PAST_END_TRAP, `compiled, cut ${cut}`)
+        }
     })
 })

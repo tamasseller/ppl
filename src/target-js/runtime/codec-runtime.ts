@@ -22,6 +22,7 @@
  */
 
 import type {CryptoContext} from "../../codecs/engine/crypto"
+import {PAST_END_TRAP} from "../../codecs/engine/codec-extension"
 
 /** TAG: which variant is currently active, as its declaration-order
  *  index — codegen bakes in the variant name list itself (from the
@@ -74,6 +75,14 @@ export interface Iter { pos: number; capability: "read" | "write"; overwriteOnly
  *  trimmed to exactly what was written; `decode${name}` passes its own
  *  `bytes` parameter straight through as `buffer`, no copy either. */
 export interface Ctx { buffer: Uint8Array; length: number; iters: Iter[] }
+
+function requireAvailable(ctx: Ctx, pos: number, bytes: number): void
+{
+    if(pos + bytes > ctx.length)
+    {
+        throw new CodecTrap(PAST_END_TRAP, `read past the stream's end`)
+    }
+}
 
 function iterAt(ctx: Ctx, id: number): Iter
 {
@@ -134,7 +143,7 @@ function readBytes(dv: DataView, buffer: Uint8Array, pos: number, width: number)
     let value = 0
     for(let byte = 0; byte < width; byte++)
     {
-        value |= (buffer[pos + byte] ?? 0) << (8 * byte)
+        value |= buffer[pos + byte]! << (8 * byte)
     }
 
     return value >>> 0
@@ -185,6 +194,7 @@ export function read(ctx: Ctx, iterIdx: number, width: number): number
         throw new Error(`codec: READ on write-only iterator ${iterIdx}`)
     }
 
+    requireAvailable(ctx, it.pos, width)
     const value = readBytes(view(ctx), ctx.buffer, it.pos, width)
     it.pos += width
     return value
@@ -317,6 +327,7 @@ export function readSeq(ctx: Ctx, iterIdx: number, arr: number[], width: number,
         throw new Error(`codec: READ_SEQ on write-only iterator ${iterIdx}`)
     }
 
+    requireAvailable(ctx, it.pos, width * count)
     const dv = view(ctx)
     for(let i = 0; i < count; i++)
     {
@@ -355,7 +366,7 @@ export function readSeq(ctx: Ctx, iterIdx: number, arr: number[], width: number,
  *  field, not something this helper works around. */
 export function readSeqView<A extends ArrayBufferView>(
     ctx: Ctx, iterIdx: number,
-    ctor: new (buffer: ArrayBufferLike, byteOffset: number, length: number) => A,
+    ctor: (new (buffer: ArrayBufferLike, byteOffset: number, length: number) => A) & {readonly BYTES_PER_ELEMENT: number},
     count: number,
 ): A
 {
@@ -364,6 +375,8 @@ export function readSeqView<A extends ArrayBufferView>(
     {
         throw new Error(`codec: READ_SEQ on write-only iterator ${iterIdx}`)
     }
+
+    requireAvailable(ctx, it.pos, ctor.BYTES_PER_ELEMENT * count)
 
     const result = new ctor(ctx.buffer.buffer, ctx.buffer.byteOffset + it.pos, count)
     it.pos += result.byteLength

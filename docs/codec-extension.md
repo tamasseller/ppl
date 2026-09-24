@@ -164,6 +164,9 @@ procedure header.
 a pretest stream loop ("while there are more bytes") expressible without a
 separate length count.
 
+A read past the stream's end (`READ`, `READ_SEQ`) traps with `-1`
+(`PAST_END_TRAP`), in the interpreter and in generated code alike.
+
 ### 3.2 Target access class
 
 Core operations are **unfused**: `ENTER` navigates to a child, then a

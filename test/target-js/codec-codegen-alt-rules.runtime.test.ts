@@ -18,7 +18,7 @@ import * as assert from "node:assert/strict"
 
 import type { SemanticType } from "../../src/core/index"
 import { struct, union, list, u8, integer, named, pList, pStar, pStructFields, child } from "../../src/core/index"
-import { buildCodec, binaryEncodeRules, binaryDecodeRules, deltaLeb128EncodeRule, deltaLeb128DecodeRule } from "../../src/codecs/index"
+import { buildCodec, binaryEncodeRules, binaryDecodeRules, deltaLeb128EncodeRule, deltaLeb128DecodeRule, PAST_END_TRAP } from "../../src/codecs/index"
 
 import type { TsRule } from "../../src/target-js/engine/resolver"
 import { tsRule } from "../../src/target-js/engine/resolver"
@@ -241,6 +241,17 @@ describe("codec-codegen — alternative representations actually round-trip thro
 
         const bytes = encode(Int16Array.from([1000, -1000, 32767, -32768]))
         assert.throws(() => decode(bytes), /start offset|BYTES_PER_ELEMENT|multiple/)
+    })
+
+    test("int16ListAsInt16ArrayRule: a view cut short traps rather than aliasing bytes past its end", () =>
+    {
+        const T = named("Padded", struct({ pad: integer(0, 255), samples: list(integer(-32768, 32767), 4) }))
+        const { encode, decode } = loadCompiled(T, "Padded", [int16ListAsInt16ArrayRule, ...tsTypeRules])
+
+        const bytes = encode({ pad: 7, samples: Int16Array.from([1000, -1000, 32767, -32768]) })
+        const backing = new Uint8Array(64)
+        backing.set(bytes)
+        assert.throws(() => decode(backing.subarray(0, bytes.length - 2)), (e: unknown) => (e as { code?: number }).code === PAST_END_TRAP)
     })
 
     test("int16ListAsInt16ArrayRule: falls back to per-element access when the codec pairing can't use bulk transfer", () =>

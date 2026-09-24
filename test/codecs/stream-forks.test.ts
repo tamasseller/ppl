@@ -218,7 +218,7 @@ describe("stream forks — fork scope across delegation (§2.1)", () =>
     // can't know what its caller parked there, which is the whole point.
     const T = struct({ a: u8 })
     const leafCloningItsOwnFork = codecRule(pInteger(-Infinity, Infinity), (_m, _c: void) =>
-        ir`write(0, 1, load_val(0)); clone_rd(0, 1); u32 s = 0; s = read(1, 1);`)
+        ir`clone_rd(0, 1); write(0, 1, load_val(0)); u32 s = 0; s = read(1, 1);`)
 
     function encode(program: RtlProgram<CodecExtInstr>): number[]
     {

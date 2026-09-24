@@ -38,6 +38,16 @@ import { createCryptoContext, integerParamBytes } from "./crypto"
 
 export type { Direction }
 
+/** The trap code for a read past the stream's end, in both the interpreter
+ *  and generated code: `-1`, never a code a program's own `TRAP` carries. */
+export const PAST_END_TRAP = -1
+
+function pastEnd(state: ExecState): never
+{
+    if(!state.trap) throw new Error(`codec extension: read past the stream's end under an evaluator that cannot trap`)
+    return state.trap(PAST_END_TRAP)
+}
+
 /** Smallest byte width that fits an integer type's declared range — the
  *  source of truth for both `../components/binary-rules.ts` (which byte
  *  count to `WRITE`/`READ`) and `toHostNumber` below (which bit is the sign
@@ -649,9 +659,10 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const { iter: iterId, width } = instr
                 const it = iterAt(iterId)
                 if(it.capability !== "read") throw new Error(`codec extension: READ on write-only iterator ${iterId}`)
+                if(it.pos + width > buffer.length) return pastEnd(state)
                 let value = 0
                 for(let byte = 0; byte < width; byte++)
-                    value |= (buffer[it.pos++] ?? 0) << (8 * byte)
+                    value |= buffer[it.pos++]! << (8 * byte)
                 state.acc = value >>> 0
                 return
             }
@@ -767,11 +778,12 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 if(!h) throw new Error(`codec extension: READ_SEQ on unbound handle ${handleId}`)
                 const arr = get(h) as number[]
                 const count = state.acc
+                if(it.pos + width * count > buffer.length) return pastEnd(state)
                 for(let i = 0; i < count; i++)
                 {
                     let value = 0
                     for(let byte = 0; byte < width; byte++)
-                        value |= (buffer[it.pos++] ?? 0) << (8 * byte)
+                        value |= buffer[it.pos++]! << (8 * byte)
                     value = value >>> 0
                     arr[i] = signed ? signExtend(width * 8, value) : value
                 }
