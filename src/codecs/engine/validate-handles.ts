@@ -273,6 +273,13 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
                 iterOf(iterEnv, procIndex, pc, end, instr.ext)
                 return
             }
+            case "ABSORB_REST":
+            {
+                const {crypto, src} = instr
+                liveCrypto(cryptoEnv, procIndex, pc, crypto, instr.ext)
+                if(iterOf(iterEnv, procIndex, pc, src, instr.ext) !== "read") fail(procIndex, pc, `ABSORB_REST: iterator ${src} must be a CLONE_RD fork`)
+                return
+            }
             case "FINAL":
             case "VERIFY":
             {

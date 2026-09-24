@@ -1,11 +1,11 @@
 /**
- * target-js — Translation for the 21 codec-extension opcodes
+ * target-js — Translation for the 22 codec-extension opcodes
  * (`src/codecs/engine/opcodes.ts`) that `codec-codegen.ts`'s generic
  * `Stmt`/`Expr` tree walk hands off to whenever it hits an `Ext` node:
  *
  * - The nestable-expression ops (`LOAD_VAL`/`COUNT`/`TAG`/`READ`/`WRITE`/
  *   `CLONE_RD`/`CLONE_WR`/`SEEK`/`WRITE_SEQ`/`READ_SEQ`, and the crypto
- *   ops `INIT`/`ABSORB`/`FINAL`/`VERIFY`), via `translateExt`.
+ *   ops `INIT`/`ABSORB`/`ABSORB_REST`/`FINAL`/`VERIFY`), via `translateExt`.
  * - The statement-only ops that write/name a slot rather than yielding a
  *   value (`ENTER`/`ENTER_NEXT`/`STORE_VAL`/`OPEN_LIST`/`CALL_CODEC(_NEXT)`),
  *   via `emitExtStmtIfApplicable`.
@@ -31,7 +31,7 @@ import {kindOf, concreteKindOf, SemanticTypeKinds} from "../../core/index"
 import type {Direction, Correspondence, Resolution} from "../../core/index"
 import {resolve} from "../../core/index"
 import type {CodecExtInstr} from "../../codecs/index"
-import {requireSlotNode, intWireSize, assertNever, correspondenceChild, correspondenceElement, createCryptoContext} from "../../codecs/index"
+import {requireSlotNode, intWireSize, assertNever, correspondenceChild, correspondenceElement, cryptoSpec} from "../../codecs/index"
 import type {Accessor, TSTypeDecl} from "./resolver"
 import {LineBuilder} from "./line-builder"
 import {requireEdge, variantNamesOf, describeType} from "./codec-type-nav"
@@ -87,6 +87,11 @@ export interface GenCtx
      *  unconditionally, since wire-format concerns (width, tag order) are
      *  always the image's to define, reconciled or not. */
     readonly correspondences?: Map<number, Correspondence>
+    /** This procedure's function name, prefixing its module-level constants. */
+    readonly procName: string
+    /** Module-level declarations this procedure needs ahead of it: one
+     *  resolved `CryptoSpec` per `INIT` site, so no packet pays for it. */
+    readonly hoisted: string[]
 }
 
 export function accessorFor(node: TypeNode, g: GenCtx): Accessor
@@ -283,7 +288,7 @@ export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number
                 // Iterator ids, never handle-table slots — nothing to bump.
                 case "CLONE_RD": case "CLONE_WR": clones = true; break
                 case "READ": case "WRITE": case "HAS_NEXT": case "SEEK": break
-                case "INIT": case "ABSORB": case "FINAL": case "VERIFY": cryptos = Math.max(cryptos, e.crypto + 1); break
+                case "INIT": case "ABSORB": case "ABSORB_REST": case "FINAL": case "VERIFY": cryptos = Math.max(cryptos, e.crypto + 1); break
                 default: assertNever(e)
             }
             for(const a of e.args) visitExpr(a)
@@ -359,10 +364,15 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
         case "WRITE": return `write(ctx, ${e.iter}, ${e.width}, ${arg(0)})`
 
         case "INIT":
+        {
             // Fails here, at generation, on anything the runtime would refuse.
-            createCryptoContext(e.alg, e.params)
-            return `c${e.crypto} = cryptoInit(${JSON.stringify(e.alg)}, ${JSON.stringify(e.params)})`
+            cryptoSpec(e.alg, e.params)
+            const spec = `${g.procName}_spec${g.hoisted.length}`
+            g.hoisted.push(`const ${spec} = cryptoSpec(${JSON.stringify(e.alg)}, ${JSON.stringify(e.params)});`)
+            return `c${e.crypto} = ${spec}.create()`
+        }
         case "ABSORB": return `cryptoAbsorb(ctx, c${e.crypto}, ${e.src}, ${e.end})`
+        case "ABSORB_REST": return `cryptoAbsorbRest(ctx, c${e.crypto}, ${e.src})`
         case "FINAL": return `cryptoFinal(ctx, c${e.crypto}, ${e.iter})`
         case "VERIFY": return `cryptoVerify(ctx, c${e.crypto}, ${e.iter}, ${e.code})`
 

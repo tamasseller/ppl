@@ -2,7 +2,7 @@
  * codecs — The codec extension's opcode vocabulary (docs/codec-
  * extension.md §3)
  *
- * The single source of truth for the 21 mnemonics `codec-extension.ts`'s
+ * The single source of truth for the 22 mnemonics `codec-extension.ts`'s
  * `codecRules()`/`EFFECTS`/`exec()`, `validate-handles.ts`'s static
  * checks, and `target-js`'s `codec-codegen.ts` (a third, cross-package
  * dispatch site — same `isCodecOpcode`/`assertNever` idiom) all dispatch
@@ -41,14 +41,14 @@ export const DIRECT_OPCODES = [
     "WRITE_SEQ", "READ_SEQ",
 ] as const
 
-/** Reached through the one `ESCAPE` byte, sub-code = index here (the
- *  workspace's docs/crypto.md §2.1). Append only. */
-export const ESCAPED_OPCODES = ["INIT", "ABSORB", "FINAL", "VERIFY"] as const
+/** Reached through `CRYPTO`, the crypto ops' extension point, sub-code =
+ *  index here (the workspace's docs/crypto.md §2.1). Append only. */
+export const CRYPTO_OPCODES = ["INIT", "ABSORB", "FINAL", "VERIFY", "ABSORB_REST"] as const
 
-export const CODEC_OPCODES = [...DIRECT_OPCODES, ...ESCAPED_OPCODES] as const
+export const CODEC_OPCODES = [...DIRECT_OPCODES, ...CRYPTO_OPCODES] as const
 
 export type DirectOpcode = typeof DIRECT_OPCODES[number]
-export type EscapedOpcode = typeof ESCAPED_OPCODES[number]
+export type CryptoOpcode = typeof CRYPTO_OPCODES[number]
 export type CodecOpcode = typeof CODEC_OPCODES[number]
 
 const CODEC_OPCODE_SET: ReadonlySet<string> = new Set(CODEC_OPCODES)

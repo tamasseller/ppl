@@ -109,7 +109,7 @@ export interface CodecModuleOptions
 export const RUNTIME_IMPORTS = [
     "read", "write", "hasNext", "cloneRd", "cloneWr", "seek", "pushForks", "popForks", "writeSeq", "readSeq", "readSeqView", "writeSeqRaw",
     "tagOf", "signExtend", "revBits", "CodecTrap",
-    "cryptoInit", "cryptoAbsorb", "cryptoFinal", "cryptoVerify",
+    "cryptoSpec", "cryptoAbsorb", "cryptoAbsorbRest", "cryptoFinal", "cryptoVerify",
 ] as const
 
 /**

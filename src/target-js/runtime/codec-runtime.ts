@@ -21,8 +21,7 @@
  * either).
  */
 
-import type {CryptoContext, CryptoParam} from "../../codecs/engine/crypto"
-import {createCryptoContext} from "../../codecs/engine/crypto"
+import type {CryptoContext} from "../../codecs/engine/crypto"
 
 /** TAG: which variant is currently active, as its declaration-order
  *  index — codegen bakes in the variant name list itself (from the
@@ -428,11 +427,6 @@ export class CodecTrap extends Error
 
 // ── Crypto contexts (the workspace's docs/crypto.md) ─────────────────────
 
-export function cryptoInit(alg: string, params: readonly CryptoParam[]): CryptoContext
-{
-    return createCryptoContext(alg, params)
-}
-
 /** Advance reader `srcIdx` to `endIdx`'s position, absorbing what it passes. */
 export function cryptoAbsorb(ctx: Ctx, c: CryptoContext, srcIdx: number, endIdx: number): void
 {
@@ -448,6 +442,20 @@ export function cryptoAbsorb(ctx: Ctx, c: CryptoContext, srcIdx: number, endIdx:
         throw new Error(`codec: ABSORB: iterator ${srcIdx} is already past iterator ${endIdx}`)
     }
 
+    c.absorb(ctx.buffer, it.pos, until)
+    it.pos = until
+}
+
+/** Advance reader `srcIdx` to the stream's end, absorbing what it passes. */
+export function cryptoAbsorbRest(ctx: Ctx, c: CryptoContext, srcIdx: number): void
+{
+    const it = iterAt(ctx, srcIdx)
+    if(it.capability !== "read")
+    {
+        throw new Error(`codec: ABSORB_REST from write-only iterator ${srcIdx}`)
+    }
+
+    const until = Math.max(it.pos, ctx.length)
     c.absorb(ctx.buffer, it.pos, until)
     it.pos = until
 }

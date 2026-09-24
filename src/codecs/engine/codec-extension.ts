@@ -1,7 +1,7 @@
 /**
  * codecs — Codec extension (docs/codec-extension.md)
  *
- * Implements `mog-core`'s `Extension` hook for all 21 opcodes
+ * Implements `mog-core`'s `Extension` hook for all 22 opcodes
  * `./opcodes.ts` names (§2/§3), plus `codecRules()`, their `ir\`...\`` DSL
  * surface. Lives here rather than `mog-core` because that package must
  * stay protocol-agnostic; conceptually it's still core infrastructure, not
@@ -31,7 +31,7 @@ import {
     enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr,
     readInstr, writeInstr, hasNextInstr, cloneRdInstr, cloneWrInstr, seekInstr,
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
-    initInstr, absorbInstr, finalInstr, verifyInstr,
+    initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
 } from "./codec-ext-instr"
 import type { CryptoContext, CryptoParam } from "./crypto"
 import { createCryptoContext, integerParamBytes } from "./crypto"
@@ -208,6 +208,7 @@ export const CODEC_EFFECTS: Readonly<Record<CodecOpcode, ExtOpEffect<CodecExtIns
     ABSORB: { tosDelta: 0, maxTransient: 0, killsAcc: true },
     FINAL:  { tosDelta: 0, maxTransient: 0, killsAcc: true },
     VERIFY: { tosDelta: 0, maxTransient: 0, killsAcc: true },
+    ABSORB_REST: { tosDelta: 0, maxTransient: 0, killsAcc: true },
 }
 
 /** `crypto_init`'s tail read as name/value pairs. */
@@ -386,6 +387,12 @@ export function codecRules(_resolveLocal: (name: string) => number, resolveCalle
         {
             const [crypto, src, end] = m.argumentMatches
             return leafNode<CodecExtInstr>(["acc"], [absorbInstr(crypto.value, src.value, end.value)], [], 0, 0)
+        }),
+
+        rule("codec:absorb_rest", pBuiltinCall("absorb_rest", pConst(), pConst()), m =>
+        {
+            const [crypto, src] = m.argumentMatches
+            return leafNode<CodecExtInstr>(["acc"], [absorbRestInstr(crypto.value, src.value)], [], 0, 0)
         }),
 
         rule("codec:final", pBuiltinCall("final", pConst(), pConst()), m =>
@@ -786,6 +793,17 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const until = iterAt(end).pos
                 if(it.pos > until) throw new Error(`codec extension: ABSORB: iterator ${src} is already past iterator ${end}`)
                 cryptoAt(crypto, "ABSORB").absorb(buffer, it.pos, until)
+                it.pos = until
+                return
+            }
+
+            case "ABSORB_REST":
+            {
+                const { crypto, src } = instr
+                const it = iterAt(src)
+                if(it.capability !== "read") throw new Error(`codec extension: ABSORB_REST from write-only iterator ${src}`)
+                const until = Math.max(it.pos, buffer.length)
+                cryptoAt(crypto, "ABSORB_REST").absorb(buffer, it.pos, until)
                 it.pos = until
                 return
             }

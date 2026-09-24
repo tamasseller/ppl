@@ -97,17 +97,25 @@ describe("crc frame — round trip", () =>
         }
     })
 
-    test("a frame on a nested type leaves the rest of the tree unframed", () =>
+    test("a frame as the stream's last field leaves what precedes it unframed", () =>
     {
-        const Outer = struct({ head: u8, packet: Packet, tail: u8 })
+        const Outer = struct({ head: u8, packet: Packet })
         const spec = { alg: "CRC-8/SMBUS", code: TRAP_CRC }
-        const v = { head: 1, packet: value, tail: 2 }
+        const v = { head: 1, packet: value }
         const bytes = encode(Outer, encodeRules(spec), v)
         const body = encode(Packet, binaryEncodeRules, value)
-        assert.deepEqual(bytes, [1, ...body, ...crcBytes("CRC-8/SMBUS", body, true, 8), 2])
+        assert.deepEqual(bytes, [1, ...crcBytes("CRC-8/SMBUS", body, true, 8), ...body])
         const { result, value: decoded } = decode(Outer, decodeRules(spec), bytes)
         assert.equal(result.ok, true)
         assert.deepEqual(decoded, v)
+    })
+
+    test("a frame followed by more of the stream traps: its CRC covers the rest of the stream", () =>
+    {
+        const Outer = struct({ packet: Packet, tail: u8 })
+        const spec = { alg: "CRC-8/SMBUS", code: TRAP_CRC }
+        const bytes = encode(Outer, encodeRules(spec), { packet: value, tail: 2 })
+        assert.equal(decode(Outer, decodeRules(spec), bytes).result.trapCode, TRAP_CRC)
     })
 })
 
@@ -115,16 +123,16 @@ describe("crc frame — wire bytes", () =>
 {
     const body = encode(Packet, binaryEncodeRules, value)
 
-    test("the unframed bytes, then the CRC big-endian by default for an unreflected CRC", () =>
+    test("the CRC, big-endian by default for an unreflected CRC, then the unframed bytes", () =>
     {
         assert.deepEqual(encode(Packet, encodeRules({ alg: "CRC-16/IBM-3740", code: TRAP_CRC }), value),
-            [...body, ...crcBytes("CRC-16/IBM-3740", body, true, 16)])
+            [...crcBytes("CRC-16/IBM-3740", body, true, 16), ...body])
     })
 
     test("little-endian by default for a reflected CRC", () =>
     {
         assert.deepEqual(encode(Packet, encodeRules({ alg: "CRC-32/ISO-HDLC", code: TRAP_CRC }), value),
-            [...body, ...crcBytes("CRC-32/ISO-HDLC", body, false, 32)])
+            [...crcBytes("CRC-32/ISO-HDLC", body, false, 32), ...body])
     })
 
     for(const [byteorder, bigEndian] of [[0, false], [1, true]] as const)
@@ -136,7 +144,7 @@ describe("crc frame — wire bytes", () =>
                 const spec = { alg, params: { byteorder }, code: TRAP_CRC }
                 const bytes = encode(Packet, encodeRules(spec), value)
                 const width = alg === "CRC-32/ISO-HDLC" ? 32 : 16
-                assert.deepEqual(bytes, [...body, ...crcBytes(alg, body, bigEndian, width)], alg)
+                assert.deepEqual(bytes, [...crcBytes(alg, body, bigEndian, width), ...body], alg)
                 assert.equal(decode(Packet, decodeRules(spec), bytes).result.ok, true, alg)
             }
         })
@@ -146,7 +154,7 @@ describe("crc frame — wire bytes", () =>
     {
         const bytes = encode(Packet, encodeRules({ alg: "CRC-5/USB", code: TRAP_CRC }), value)
         assert.equal(bytes.length, body.length + 1)
-        assert.deepEqual(bytes.slice(-1), crcBytes("CRC-5/USB", body, false, 5))
+        assert.deepEqual(bytes.slice(0, 1), crcBytes("CRC-5/USB", body, false, 5))
     })
 
     test("the custom \"CRC\" spelling writes the same bytes as its catalogue name", () =>
@@ -163,7 +171,7 @@ describe("crc frame — a corrupted frame traps, and nothing else differs", () =
 
     test("the happy path decodes exactly what the unframed codec does", () =>
     {
-        const unframed = decode(Packet, binaryDecodeRules, good.slice(0, -2))
+        const unframed = decode(Packet, binaryDecodeRules, good.slice(2))
         assert.deepEqual(decode(Packet, decodeRules(spec), good).value, unframed.value)
     })
 
@@ -180,9 +188,11 @@ describe("crc frame — a corrupted frame traps, and nothing else differs", () =
             }
     })
 
-    test("a missing CRC byte traps too", () =>
+    test("a truncated or extended stream traps too", () =>
     {
         assert.equal(decode(Packet, decodeRules(spec), good.slice(0, -1)).result.trapCode, TRAP_CRC)
+        assert.equal(decode(Packet, decodeRules(spec), good.slice(0, 1)).result.trapCode, TRAP_CRC)
+        assert.equal(decode(Packet, decodeRules(spec), [...good, 0]).result.trapCode, TRAP_CRC)
     })
 })
 

@@ -13,7 +13,7 @@ import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
 import { encodeInstr, decodeInstr, encodeBody, decodeBody, ir, lowerProgram, proc } from "mog-core"
-import { callCodecInstr, callCodecNextInstr, cloneRdInstr, cloneWrInstr, countInstr, enterInstr, enterNextInstr, hasNextInstr, loadValInstr, openListInstr, readInstr, readSeqInstr, seekInstr, storeValInstr, tagInstr, writeInstr, writeSeqInstr, initInstr, absorbInstr, finalInstr, verifyInstr } from "../../src/codecs/engine/codec-ext-instr"
+import { callCodecInstr, callCodecNextInstr, cloneRdInstr, cloneWrInstr, countInstr, enterInstr, enterNextInstr, hasNextInstr, loadValInstr, openListInstr, readInstr, readSeqInstr, seekInstr, storeValInstr, tagInstr, writeInstr, writeSeqInstr, initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr } from "../../src/codecs/engine/codec-ext-instr"
 import type { CodecExtInstr } from "../../src/codecs/engine/codec-ext-instr"
 import type { ExtInstrOf, Extension } from "mog-core"
 import { struct, union, unit, u8, list } from "../../src/core/index"
@@ -90,11 +90,12 @@ const rows: Row[] = [
     { byte: 220, instr: seekInstr(3, -1) },
     { byte: 220, instr: seekInstr(4, 0) },
 
-    // ESCAPE sub-code — 221, then 222..224 spare
+    // CRYPTO sub-code — 221, the crypto extension point; 222..224 spare, reserved
     { byte: 221, instr: initInstr(0, "CRC-32/ISO-HDLC", []) },
     { byte: 221, instr: absorbInstr(0, 1, 0) },
     { byte: 221, instr: finalInstr(0, 0) },
     { byte: 221, instr: verifyInstr(0, 0, 7) },
+    { byte: 221, instr: absorbRestInstr(0, 1) },
 
     // CALL_CODEC codec_idx, src, ref — base 225, compact = src*4+ref
     { byte: 225, instr: callCodecInstr(7, 0, 0) },
@@ -151,7 +152,7 @@ describe("wire.ts — representative byte table", () =>
 
 describe("wire.ts — opcode-space budget", () =>
 {
-    test("every code but the three spare after ESCAPE decodes", () =>
+    test("every code but the three spare after CRYPTO decodes", () =>
     {
         for (let b = 128; b <= 255; b++)
         {
@@ -163,7 +164,7 @@ describe("wire.ts — opcode-space budget", () =>
     })
 })
 
-describe("wire.ts — escaped ops", () =>
+describe("wire.ts — crypto ops", () =>
 {
     test("INIT carries its name length-prefixed and its parameters as a NUL-terminated TLV list", () =>
     {
@@ -177,19 +178,20 @@ describe("wire.ts — escaped ops", () =>
         ])
     })
 
-    test("the other three are sub-code, handle, then their iterators and code", () =>
+    test("the others are sub-code, handle, then their iterators and code", () =>
     {
         assert.deepEqual(encodeInstr(absorbInstr(1, 2, 0), ext), [221, 1, 1, 2, 0])
         assert.deepEqual(encodeInstr(finalInstr(1, 0), ext), [221, 2, 1, 0])
         assert.deepEqual(encodeInstr(verifyInstr(1, 0, 300), ext), [221, 3, 1, 0, 0xac, 0x02])
+        assert.deepEqual(encodeInstr(absorbRestInstr(1, 2), ext), [221, 4, 1, 2])
     })
 
-    test("every escaped op round-trips, a multi-byte UTF-8 name and wide parameter included", () =>
+    test("every crypto op round-trips, a multi-byte UTF-8 name and wide parameter included", () =>
     {
         for (const instr of [
             initInstr(0, "CRC-82/DARC", [{ name: "byteorder", value: [1] }]),
             initInstr(300, "ünïcode", [{ name: "poly", value: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] }]),
-            absorbInstr(5, 200, 0), finalInstr(0, 3), verifyInstr(9, 1, 0xffff),
+            absorbInstr(5, 200, 0), finalInstr(0, 3), verifyInstr(9, 1, 0xffff), absorbRestInstr(2, 7),
         ])
         {
             const encoded = encodeInstr(instr, ext)
@@ -201,7 +203,7 @@ describe("wire.ts — escaped ops", () =>
 
     test("an unassigned sub-code is rejected, since its length is unknown", () =>
     {
-        assert.throws(() => decodeInstr(Uint8Array.of(221, 4, 0, 0), 0, ext), /sub-code 4 is unassigned/)
+        assert.throws(() => decodeInstr(Uint8Array.of(221, 5, 0, 0), 0, ext), /sub-code 5 is unassigned/)
     })
 
     test("a repeated parameter name is rejected both ways", () =>

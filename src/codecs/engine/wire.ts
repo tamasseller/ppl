@@ -55,22 +55,23 @@
  * (codec-extension.ts), read from `acc` at runtime, not wire-encoded.
  *
  * `SEEK` is one code, `iter` always LEB128'd; its four former compact codes
- * are `ESCAPE` and three spare, so every later band keeps its bytes.
- * `ESCAPE` is followed by an unsigned LEB128 sub-code (`ESCAPED_OPCODES`'
- * index) and that op's own operands (the workspace's docs/crypto.md §2.1).
+ * are `CRYPTO` and three spare, reserved codes, so every later band keeps
+ * its bytes. `CRYPTO` is the crypto ops' extension point: an unsigned
+ * LEB128 sub-code (`CRYPTO_OPCODES`' index), then that op's own operands
+ * (the workspace's docs/crypto.md §2.1).
  */
 
 import type { ExtCodec, ExtInstrOf } from "mog-core"
 import { encodeLeb128, decodeLeb128 } from "mog-core"
-import { DIRECT_OPCODES, ESCAPED_OPCODES, assertNever } from "./opcodes"
-import type { DirectOpcode, EscapedOpcode } from "./opcodes"
+import { DIRECT_OPCODES, CRYPTO_OPCODES, assertNever } from "./opcodes"
+import type { DirectOpcode, CryptoOpcode } from "./opcodes"
 import type { CodecExtInstr } from "./codec-ext-instr"
 import type { CryptoParam } from "./crypto"
 import {
     enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr,
     readInstr, writeInstr, hasNextInstr, cloneRdInstr, cloneWrInstr, seekInstr,
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
-    initInstr, absorbInstr, finalInstr, verifyInstr,
+    initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
 } from "./codec-ext-instr"
 
 /** Handle IDs, iterator IDs, and (per this file's header) `ENTER`'s `ref`
@@ -370,12 +371,12 @@ const BAND_BY_OP: Readonly<Record<DirectOpcode, Band>> = {
  *  consistency between `encode`/`decode`. */
 const BASE_BY_OP = new Map<DirectOpcode, number>()
 let TOTAL_CODES = 0
-let ESCAPE_CODE = -1
+let CRYPTO_CODE = -1
 for (const op of DIRECT_OPCODES)
 {
     BASE_BY_OP.set(op, TOTAL_CODES)
     TOTAL_CODES += BAND_BY_OP[op].width
-    if (op === "SEEK") { ESCAPE_CODE = TOTAL_CODES; TOTAL_CODES += 4 }
+    if (op === "SEEK") { CRYPTO_CODE = TOTAL_CODES; TOTAL_CODES += 4 }
 }
 
 // isa-core.md §5.1: the extension owns exactly the top 128 codes (bytes
@@ -403,10 +404,10 @@ function opAndLocalCodeOf(byte: number): { op: DirectOpcode; local: number }
  *  `Band` factory above stays untouched, pure bit-packing over
  *  `readonly number[]`. */
 type DirectInstr = Extract<CodecExtInstr, { ext: DirectOpcode }>
-type EscapedInstr = Extract<CodecExtInstr, { ext: EscapedOpcode }>
+type CryptoInstr = Extract<CodecExtInstr, { ext: CryptoOpcode }>
 
-const isEscaped = (instr: CodecExtInstr): instr is EscapedInstr =>
-    (ESCAPED_OPCODES as readonly string[]).includes(instr.ext)
+const isCrypto = (instr: CodecExtInstr): instr is CryptoInstr =>
+    (CRYPTO_OPCODES as readonly string[]).includes(instr.ext)
 
 function operandsOf(instr: DirectInstr): readonly number[]
 {
@@ -462,7 +463,7 @@ function fromOperands(op: DirectOpcode, operands: readonly number[]): ExtInstrOf
     }
 }
 
-// ── Escaped ops ──────────────────────────────────────────────────────────
+// ── Crypto ops ───────────────────────────────────────────────────────────
 
 const utf8 = new TextEncoder()
 const fromUtf8 = new TextDecoder("utf-8", { fatal: true })
@@ -522,25 +523,26 @@ function decodeParams(bytes: Uint8Array, pos: number): { value: CryptoParam[]; n
     }
 }
 
-function encodeEscaped(instr: EscapedInstr): number[]
+function encodeCrypto(instr: CryptoInstr): number[]
 {
-    const head = [128 + ESCAPE_CODE, ...encodeLeb128(ESCAPED_OPCODES.indexOf(instr.ext)), ...encodeLeb128(instr.crypto)]
+    const head = [128 + CRYPTO_CODE, ...encodeLeb128(CRYPTO_OPCODES.indexOf(instr.ext)), ...encodeLeb128(instr.crypto)]
     switch (instr.ext)
     {
         case "INIT": return [...head, ...encodeAlg(instr.alg), ...encodeParams(instr.params)]
         case "ABSORB": return [...head, ...encodeLeb128(instr.src), ...encodeLeb128(instr.end)]
         case "FINAL": return [...head, ...encodeLeb128(instr.iter)]
         case "VERIFY": return [...head, ...encodeLeb128(instr.iter), ...encodeLeb128(instr.code)]
+        case "ABSORB_REST": return [...head, ...encodeLeb128(instr.src)]
         default: return assertNever(instr)
     }
 }
 
-function decodeEscaped(bytes: Uint8Array, pos: number): { instr: ExtInstrOf<CodecExtInstr>; next: number }
+function decodeCrypto(bytes: Uint8Array, pos: number): { instr: ExtInstrOf<CodecExtInstr>; next: number }
 {
     const sub = decodeLeb128(bytes, pos)
-    const op = ESCAPED_OPCODES[sub.value]
+    const op = CRYPTO_OPCODES[sub.value]
     // An unassigned sub-code has no known length, so nothing after it can be read.
-    if (op === undefined) throw new Error(`wire: escape sub-code ${sub.value} is unassigned`)
+    if (op === undefined) throw new Error(`wire: crypto sub-code ${sub.value} is unassigned`)
     const crypto = decodeLeb128(bytes, sub.next)
     switch (op)
     {
@@ -567,13 +569,18 @@ function decodeEscaped(bytes: Uint8Array, pos: number): { instr: ExtInstrOf<Code
             const code = decodeLeb128(bytes, iter.next)
             return { instr: verifyInstr(crypto.value, iter.value, code.value), next: code.next }
         }
+        case "ABSORB_REST":
+        {
+            const src = decodeLeb128(bytes, crypto.next)
+            return { instr: absorbRestInstr(crypto.value, src.value), next: src.next }
+        }
         default: return assertNever(op)
     }
 }
 
 function encode(instr: CodecExtInstr): number[]
 {
-    if (isEscaped(instr)) return encodeEscaped(instr)
+    if (isCrypto(instr)) return encodeCrypto(instr)
     const op = instr.ext
     const band = BAND_BY_OP[op]
     const base = BASE_BY_OP.get(op)!
@@ -583,7 +590,7 @@ function encode(instr: CodecExtInstr): number[]
 
 function decode(bytes: Uint8Array, offset: number): { instr: ExtInstrOf<CodecExtInstr>; next: number }
 {
-    if (bytes[offset]! - 128 === ESCAPE_CODE) return decodeEscaped(bytes, offset + 1)
+    if (bytes[offset]! - 128 === CRYPTO_CODE) return decodeCrypto(bytes, offset + 1)
     const { op, local } = opAndLocalCodeOf(bytes[offset]!)
     const { operands, next } = BAND_BY_OP[op].decode(local, bytes, offset + 1)
     return { instr: fromOperands(op, operands), next }

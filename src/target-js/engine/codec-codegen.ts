@@ -304,7 +304,7 @@ export function generateProcedure(
     const {maxSlot, listTraversalSlots, clones, cryptos} = prescan(raised.body)
     const cryptoDecl = cryptos > 0 ? `let ${Array.from({length: cryptos}, (_, i) => `c${i}!: CryptoContext`).join(", ")};` : undefined
     const correspondences = entryCorrespondence ? new Map([[0, entryCorrespondence]]) : undefined
-    const g: GenCtx = {direction, slotTypes, projection, writeBacks: new Map(), idxDeclared: new Set(), tempCounter: {n: 0}, correspondences}
+    const g: GenCtx = {direction, slotTypes, projection, writeBacks: new Map(), idxDeclared: new Set(), tempCounter: {n: 0}, correspondences, procName: `${direction}_proc${index}`, hoisted: []}
 
     const b = new LineBuilder()
 
@@ -325,7 +325,7 @@ export function generateProcedure(
             if(cryptoDecl) b.line(cryptoDecl)
             withForkFrame(clones, b, () => translateStmts(raised.body, undefined, g, b))
         })
-        return b.toString()
+        return withHoisted(g, b)
     }
 
     // A procedure boundary reached entirely through image-only navigation
@@ -381,5 +381,10 @@ export function generateProcedure(
         })
     }
 
-    return b.toString()
+    return withHoisted(g, b)
+}
+
+function withHoisted(g: GenCtx, b: LineBuilder): string
+{
+    return g.hoisted.length === 0 ? b.toString() : `${g.hoisted.join("\n")}\n${b.toString()}`
 }

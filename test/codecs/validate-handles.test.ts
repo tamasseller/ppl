@@ -205,6 +205,12 @@ describe("validateCodecHandles — crypto handles", () =>
         assert.throws(() => validateCodecHandles(root), /iterator 0 must be a CLONE_RD fork/)
     })
 
+    test("rejects ABSORB_REST from a writer fork", () =>
+    {
+        const program = lower(irProc([], ir`crypto_init(0, "CRC-8/SMBUS"); clone_wr(0, 1); absorb_rest(0, 1); return;`))
+        assert.throws(() => validateCodecHandles(program), /ABSORB_REST: iterator 1 must be a CLONE_RD fork/)
+    })
+
     test("rejects a context used after FINAL spent it", () =>
     {
         const program = lower(irProc([], ir`crypto_init(0, "CRC-8/SMBUS"); final(0, 0); final(0, 0); return;`))

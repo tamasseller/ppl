@@ -44,6 +44,7 @@ export type CodecExtInstr =
     | { ext: "ABSORB"; crypto: number; src: number; end: number }
     | { ext: "FINAL"; crypto: number; iter: number }
     | { ext: "VERIFY"; crypto: number; iter: number; code: number }
+    | { ext: "ABSORB_REST"; crypto: number; src: number }
 
 export const enterInstr = (dst: number, src: number, ref: number): ExtInstrOf<CodecExtInstr> =>
     ({ op: "EXT", ext: "ENTER", dst, src, ref })
@@ -107,3 +108,6 @@ export const finalInstr = (crypto: number, iter: number): ExtInstrOf<CodecExtIns
 
 export const verifyInstr = (crypto: number, iter: number, code: number): ExtInstrOf<CodecExtInstr> =>
     ({ op: "EXT", ext: "VERIFY", crypto, iter, code })
+
+export const absorbRestInstr = (crypto: number, src: number): ExtInstrOf<CodecExtInstr> =>
+    ({ op: "EXT", ext: "ABSORB_REST", crypto, src })

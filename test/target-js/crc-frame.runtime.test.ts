@@ -67,16 +67,13 @@ describe("crc frame — generated code", () =>
         })
     }
 
-    test("every single-bit flip outside the list count throws a CodecTrap with the frame's code", () =>
+    test("every single-bit flip throws a CodecTrap with the frame's code, before the body is read", () =>
     {
         const { encode, decode } = compiled({ alg: "CRC-16/IBM-3740", code: TRAP_CRC })
         const good = encode(value)
-        // A grown count reads past the buffer before VERIFY runs (the workspace's docs/FINDINGS.md).
-        const COUNT_BYTE = 2
         for(let byte = 0; byte < good.length; byte++)
             for(let bit = 0; bit < 8; bit++)
             {
-                if(byte === COUNT_BYTE) continue
                 const bad = Uint8Array.from(good)
                 bad[byte]! ^= 1 << bit
                 assert.throws(() => decode(bad), (e: unknown) => e instanceof Error && e.name === "CodecTrap" && (e as CodecTrap).code === TRAP_CRC,
@@ -84,11 +81,12 @@ describe("crc frame — generated code", () =>
             }
     })
 
-    test("a missing CRC byte traps too", () =>
+    test("a truncated stream traps too, even one shorter than the CRC", () =>
     {
         const { encode, decode } = compiled({ alg: "CRC-16/IBM-3740", code: TRAP_CRC })
         const good = encode(value)
-        assert.throws(() => decode(good.subarray(0, good.length - 1)), (e: unknown) => (e as CodecTrap).code === TRAP_CRC)
+        for(const cut of [good.length - 1, 1, 0])
+            assert.throws(() => decode(good.subarray(0, cut)), (e: unknown) => (e as CodecTrap).code === TRAP_CRC, `cut ${cut}`)
     })
 
     test("an algorithm the runtime does not implement fails at generation", () =>

@@ -122,50 +122,33 @@ function reflect(v: bigint, bits: number): bigint
     return r
 }
 
-/** Table-driven Rocksoft model over any width. A register narrower than a
- *  byte runs left-aligned in 8 bits, unreflected. */
-function crcContext(m: CrcModel): CryptoContext
+function reflect32(v: number, bits: number): number
 {
-    const table: bigint[] = new Array(256)
-    let reg: bigint
-    let step: (b: number) => void
-    let result: () => bigint
+    let r = 0
+    for(let i = 0; i < bits; i++, v >>>= 1) r = (r << 1) | (v & 1)
+    return r >>> 0
+}
 
-    if(m.refin)
-    {
-        const rpoly = reflect(m.poly, m.width)
-        for(let i = 0; i < 256; i++)
-        {
-            let c = BigInt(i)
-            for(let k = 0; k < 8; k++) c = (c & 1n) ? (c >> 1n) ^ rpoly : c >> 1n
-            table[i] = c
-        }
-        reg = reflect(m.init, m.width)
-        step = b => { reg = (reg >> 8n) ^ table[Number((reg ^ BigInt(b)) & 0xffn)]! }
-        result = () => m.refout ? reg : reflect(reg, m.width)
-    }
-    else
-    {
-        const w = Math.max(m.width, 8)
-        const shift = BigInt(w - m.width)
-        const hi = BigInt(w - 8)
-        const top = 1n << BigInt(w - 1)
-        const mask = (1n << BigInt(w)) - 1n
-        const poly = m.poly << shift
-        for(let i = 0; i < 256; i++)
-        {
-            let c = BigInt(i) << hi
-            for(let k = 0; k < 8; k++) c = (c & top) ? ((c << 1n) ^ poly) & mask : (c << 1n) & mask
-            table[i] = c
-        }
-        reg = m.init << shift
-        step = b => { reg = ((reg << 8n) & mask) ^ table[Number(((reg >> hi) ^ BigInt(b)) & 0xffn)]! }
-        result = () => { const crc = reg >> shift; return m.refout ? reflect(crc, m.width) : crc }
-    }
+/** A configuration resolved once: its table, and a factory for contexts. */
+export interface CryptoSpec
+{
+    /** The result's wire length. */
+    readonly outLen: number
+    readonly bigEndian: boolean
+    create(): CryptoContext
+}
 
-    const outLen = Math.ceil(m.width / 8)
+/** A 32-bit result's wire bytes. */
+function bytes32(v: number, outLen: number, bigEndian: boolean): number[]
+{
+    const out: number[] = new Array(outLen)
+    for(let i = 0; i < outLen; i++) out[bigEndian ? outLen - 1 - i : i] = (v >>> (8 * i)) & 0xff
+    return out
+}
+
+function context(outLen: number, bigEndian: boolean, step: (b: number) => void, result: () => bigint): CryptoContext
+{
     let spent = false
-
     return {
         outLen,
         absorb(bytes, from, to)
@@ -177,26 +160,177 @@ function crcContext(m: CrcModel): CryptoContext
         {
             if(spent) throw new Error(`crypto: context finished twice`)
             spent = true
-            let v = result() ^ m.xorout
+            let v = result()
             const le: number[] = []
             for(let i = 0; i < outLen; i++, v >>= 8n) le.push(Number(v & 0xffn))
-            return m.bigEndian ? le.reverse() : le
+            return bigEndian ? le.reverse() : le
         },
     }
 }
 
-/** A fresh context for `alg` configured by `params`; throws on anything it
- *  does not implement, which is also how codegen checks a configuration. */
+/** Table-driven Rocksoft model in 32-bit arithmetic. A register narrower
+ *  than a byte runs left-aligned in 8 bits, unreflected. */
+function crcSpec32(m: CrcModel): CryptoSpec
+{
+    const table = new Uint32Array(256)
+    const outLen = Math.ceil(m.width / 8)
+    const xorout = Number(m.xorout)
+    const { width, refout, bigEndian } = m
+
+    if(m.refin)
+    {
+        const rpoly = reflect32(Number(m.poly), width)
+        for(let i = 0; i < 256; i++)
+        {
+            let c = i
+            for(let k = 0; k < 8; k++) c = (c & 1) ? (c >>> 1) ^ rpoly : c >>> 1
+            table[i] = c
+        }
+        const init = reflect32(Number(m.init), width)
+        return {
+            outLen,
+            bigEndian,
+            create()
+            {
+                let reg = init
+                let spent = false
+                return {
+                    outLen,
+                    absorb(bytes, from, to)
+                    {
+                        if(spent) throw new Error(`crypto: ABSORB into a finished context`)
+                        for(let i = from; i < to; i++) reg = (reg >>> 8) ^ table[(reg ^ (bytes[i] ?? 0)) & 0xff]!
+                    },
+                    final()
+                    {
+                        if(spent) throw new Error(`crypto: context finished twice`)
+                        spent = true
+                        return bytes32(((refout ? reg >>> 0 : reflect32(reg >>> 0, width)) ^ xorout) >>> 0, outLen, bigEndian)
+                    },
+                }
+            },
+        }
+    }
+
+    const w = Math.max(width, 8)
+    const shift = w - width
+    const hi = w - 8
+    const top = 2 ** (w - 1)
+    const mask = 2 ** w - 1
+    const poly = (Number(m.poly) << shift) & mask
+    for(let i = 0; i < 256; i++)
+    {
+        let c = i << hi
+        for(let k = 0; k < 8; k++) c = ((c >>> 0) >= top) ? ((c << 1) ^ poly) & mask : (c << 1) & mask
+        table[i] = c
+    }
+    const init = (Number(m.init) << shift) & mask
+    return {
+        outLen,
+        bigEndian,
+        create()
+        {
+            let reg = init
+            let spent = false
+            return {
+                outLen,
+                absorb(bytes, from, to)
+                {
+                    if(spent) throw new Error(`crypto: ABSORB into a finished context`)
+                    for(let i = from; i < to; i++) reg = ((reg << 8) & mask) ^ table[((reg >>> hi) ^ (bytes[i] ?? 0)) & 0xff]!
+                },
+                final()
+                {
+                    if(spent) throw new Error(`crypto: context finished twice`)
+                    spent = true
+                    const crc = (reg >>> 0) >>> shift
+                    return bytes32(((refout ? reflect32(crc, width) : crc) ^ xorout) >>> 0, outLen, bigEndian)
+                },
+            }
+        },
+    }
+}
+
+/** The same model over BigInt, for the widths 32 bits cannot hold. */
+function crcSpecWide(m: CrcModel): CryptoSpec
+{
+    const table: bigint[] = new Array(256)
+    const outLen = Math.ceil(m.width / 8)
+    const mask = (1n << BigInt(m.width)) - 1n
+
+    if(m.refin)
+    {
+        const rpoly = reflect(m.poly, m.width)
+        for(let i = 0; i < 256; i++)
+        {
+            let c = BigInt(i)
+            for(let k = 0; k < 8; k++) c = (c & 1n) ? (c >> 1n) ^ rpoly : c >> 1n
+            table[i] = c
+        }
+        const init = reflect(m.init, m.width)
+        return {
+            outLen,
+            bigEndian: m.bigEndian,
+            create()
+            {
+                let reg = init
+                return context(outLen, m.bigEndian,
+                    b => { reg = (reg >> 8n) ^ table[Number((reg ^ BigInt(b)) & 0xffn)]! },
+                    () => (m.refout ? reg : reflect(reg, m.width)) ^ m.xorout)
+            },
+        }
+    }
+
+    const hi = BigInt(m.width - 8)
+    const top = 1n << BigInt(m.width - 1)
+    for(let i = 0; i < 256; i++)
+    {
+        let c = BigInt(i) << hi
+        for(let k = 0; k < 8; k++) c = (c & top) ? ((c << 1n) ^ m.poly) & mask : (c << 1n) & mask
+        table[i] = c
+    }
+    return {
+        outLen,
+        bigEndian: m.bigEndian,
+        create()
+        {
+            let reg = m.init
+            return context(outLen, m.bigEndian,
+                b => { reg = ((reg << 8n) & mask) ^ table[Number(((reg >> hi) ^ BigInt(b)) & 0xffn)]! },
+                () => (m.refout ? reflect(reg, m.width) : reg) ^ m.xorout)
+        },
+    }
+}
+
+const SPECS = new Map<string, CryptoSpec>()
+
+/** `alg` under `params`, validated and resolved once per configuration;
+ *  throws on anything not implemented, which is how codegen checks one. */
+export function cryptoSpec(alg: string, params: readonly CryptoParam[]): CryptoSpec
+{
+    const key = `${alg}\0${params.map(p => `${p.name}=${p.value.join(",")}`).join(";")}`
+    let spec = SPECS.get(key)
+    if(!spec)
+    {
+        const m = crcModel(alg, params)
+        spec = m.width <= 32 ? crcSpec32(m) : crcSpecWide(m)
+        SPECS.set(key, spec)
+    }
+    return spec
+}
+
 export function createCryptoContext(alg: string, params: readonly CryptoParam[]): CryptoContext
 {
-    return crcContext(crcModel(alg, params))
+    return cryptoSpec(alg, params).create()
 }
 
 /** The integer CRC of `bytes` under `alg`, `xorout` applied — what a
  *  catalogue entry's `check` names. */
 export function crcValue(alg: string, params: readonly CryptoParam[], bytes: ArrayLike<number>): bigint
 {
-    const ctx = crcContext({ ...crcModel(alg, params), bigEndian: false })
+    const spec = cryptoSpec(alg, params)
+    const ctx = spec.create()
     ctx.absorb(bytes, 0, bytes.length)
-    return integerOf(ctx.final())
+    const out = ctx.final()
+    return integerOf(spec.bigEndian ? out.reverse() : out)
 }
