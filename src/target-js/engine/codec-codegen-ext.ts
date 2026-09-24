@@ -92,6 +92,8 @@ export interface GenCtx
     readonly slotPaths: Map<number, string>
     /** List slots whose decode-side element counter `__n${slot}` is declared. */
     readonly lenDeclared: Set<number>
+    /** List slots this procedure's body closes (`CLOSE_LIST`), from `prescan`. */
+    readonly closedLists: ReadonlySet<number>
     /** This procedure's function name, prefixing its module-level constants. */
     readonly procName: string
     /** Module-level declarations this procedure needs ahead of it: one
@@ -262,26 +264,27 @@ function encodedElement(list: number, index: string, g: GenCtx, b: LineBuilder):
 
 /** Decode's length checks at the list's close: validation against the image's
  *  bounds, then the `trap` policies, then `pad`. */
-function emitLengthClose(g: GenCtx, b: LineBuilder): void
+function emitLengthClose(list: number, g: GenCtx, b: LineBuilder): void
 {
-    const t = requireSlotNode(g.slotTypes, 0, "list close").type as ListType
-    const where = pathOf(0, g)
+    const t = requireSlotNode(g.slotTypes, list, "list close").type as ListType
+    const where = pathOf(list, g)
+    const n = `__n${list}`
     if(t.minLength > 0 || t.maxLength !== undefined)
-        b.line(`${inDomain("__n0", t.minLength, t.maxLength ?? Infinity, `malformed length at ${where}`)};`)
-    for(const k of checksOf(0, g))
+        b.line(`${inDomain(n, t.minLength, t.maxLength ?? Infinity, `malformed length at ${where}`)};`)
+    for(const k of checksOf(list, g))
     {
         if(k.cause === "over-length" && k.policy === "trap")
-            b.line(`${inDomain("__n0", 0, k.maxLength, `too long at ${where}`)};`)
+            b.line(`${inDomain(n, 0, k.maxLength, `too long at ${where}`)};`)
         else if(k.cause === "under-length" && k.policy === "trap")
-            b.line(`${inDomain("__n0", k.minLength, Infinity, `too short at ${where}`)};`)
+            b.line(`${inDomain(n, k.minLength, Infinity, `too short at ${where}`)};`)
         else if(k.cause === "under-length")
         {
-            const access = expectAccessor(localAccessorFor(0, g), "list", requireSlotNode(g.slotTypes, 0, "list pad"))
-            b.block(`while (__n0 < ${k.minLength}) {`, () =>
+            const access = expectAccessor(localAccessorFor(list, g), "list", requireSlotNode(g.slotTypes, list, "list pad"))
+            b.block(`while (${n} < ${k.minLength}) {`, () =>
             {
-                const def = emitDefaultValue(localElementNode(0, g), `${where}[]`, n => accessorFor(n, g), g, b)
-                b.line(`${access.appendElement?.("v0", def) ?? `v0.push(${def})`};`)
-                b.line("__n0++;")
+                const def = emitDefaultValue(localElementNode(list, g), `${where}[]`, e => accessorFor(e, g), g, b)
+                b.line(`${access.appendElement?.(`v${list}`, def) ?? `v${list}.push(${def})`};`)
+                b.line(`${n}++;`)
             })
         }
     }
@@ -452,8 +455,9 @@ export function expectAccessor<K extends Accessor["kind"]>(access: Accessor, kin
  *  lifetime frame) and which slots are ever the `src` of an `ENTER_NEXT`/
  *  `CALL_CODEC_NEXT` (encode needs an ascending index counter for each,
  *  declared alongside — see this file's own header for why). */
-export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number; listTraversalSlots: ReadonlySet<number>; clones: boolean; cryptos: number}
+export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number; listTraversalSlots: ReadonlySet<number>; clones: boolean; cryptos: number; closedLists: ReadonlySet<number>}
 {
+    const closedLists = new Set<number>()
     let max = 0
     let clones = false
     let cryptos = 0
@@ -470,6 +474,7 @@ export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number
                 case "ENTER_NEXT": bumpAll([e.dst, e.src]); listTraversalSlots.add(e.src); break
                 case "LOAD_VAL": case "STORE_VAL": case "COUNT": case "TAG": case "OPEN_LIST":
                     bumpAll([e.src]); break
+                case "CLOSE_LIST": bumpAll([e.src]); closedLists.add(e.src); break
                 case "CALL_CODEC": bumpAll([e.src]); break
                 case "CALL_CODEC_NEXT": bumpAll([e.src]); listTraversalSlots.add(e.src); break
                 case "WRITE_SEQ": case "READ_SEQ": bumpAll([e.handle]); break
@@ -503,7 +508,7 @@ export function prescan(stmts: readonly Stmt<CodecExtInstr>[]): {maxSlot: number
     }
 
     visitStmts(stmts)
-    return {maxSlot: max, listTraversalSlots, clones, cryptos}
+    return {maxSlot: max, listTraversalSlots, clones, cryptos, closedLists}
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -518,7 +523,7 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
 
     switch(e.ext)
     {
-        case "ENTER": case "ENTER_NEXT": case "STORE_VAL": case "OPEN_LIST":
+        case "ENTER": case "ENTER_NEXT": case "STORE_VAL": case "OPEN_LIST": case "CLOSE_LIST":
         case "CALL_CODEC": case "CALL_CODEC_NEXT":
             throw new Error(`codec-codegen: ${e.ext} should only ever appear as its own statement, never nested in an expression`)
 
@@ -758,10 +763,23 @@ function emitOpenList(src: number, g: GenCtx, b: LineBuilder): void
     const node = requireSlotNode(g.slotTypes, src, "OPEN_LIST")
     const access = expectAccessor(localAccessorFor(src, g), "list", node)
     b.line(`v${src} = ${access.beginList?.() ?? "[]"};`)
-    if(!tracksLength(src, g)) return
-    if(src !== 0) throw new Error(`codec-codegen: the length of the list at ${pathOf(src, g)} is checked, which needs the list to be its own procedure`)
+    const tracked = tracksLength(src, g)
+    if(g.direction === "decode" && (tracked || src !== 0) && !g.closedLists.has(src))
+        throw new Error(`codec-codegen: the list at ${pathOf(src, g)} is opened but never closed — its decode rule needs a close_list`)
+    if(!tracked) return
     b.line(`${g.lenDeclared.has(src) ? "" : "let "}__n${src} = 0;`)
     g.lenDeclared.add(src)
+}
+
+/** A decoded list is complete: its length checks, then, below slot 0, its
+ *  write-back into the parent. Slot 0 is finished by the procedure's return. */
+function emitCloseList(src: number, g: GenCtx, b: LineBuilder): void
+{
+    if(g.direction !== "decode") return
+    if(tracksLength(src, g)) emitLengthClose(src, g, b)
+    if(src === 0) return
+    const access = expectAccessor(localAccessorFor(src, g), "list", requireSlotNode(g.slotTypes, src, "CLOSE_LIST"))
+    emitWriteBack(src, access.finishList(`v${src}`), g, b)
 }
 
 /** `CALL_CODEC`/`CALL_CODEC_NEXT` — the one place a real function call
@@ -915,6 +933,7 @@ export function emitExtStmtIfApplicable(e: Extract<Expr<CodecExtInstr>, {kind: E
         case "ENTER_NEXT": emitEnterNext(e.dst, e.src, g, b); return true
         case "STORE_VAL": emitStoreVal(e.src, e.args[0]!, g, b); return true
         case "OPEN_LIST": emitOpenList(e.src, g, b); return true
+        case "CLOSE_LIST": emitCloseList(e.src, g, b); return true
         case "CALL_CODEC": emitCallCodec(e.calleeIndex, e.src, e.ref, g, b); return true
         case "CALL_CODEC_NEXT": emitCallCodec(e.calleeIndex, e.src, undefined, g, b); return true
         case "READ_SEQ": case "WRITE_SEQ": return emitCheckedSeq(e, g, b)
@@ -948,7 +967,6 @@ export function emitReturn(g: GenCtx, b: LineBuilder): void
     if(access.kind === "struct") b.line(`return ${access.finishStruct("v0")};`)
     else if(access.kind === "list")
     {
-        if(tracksLength(0, g)) emitLengthClose(g, b)
         b.line(`return ${access.finishList("v0")};`)
     }
     else if(access.kind === "unit") b.line(`return ${access.unitValue()};`)

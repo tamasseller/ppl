@@ -176,6 +176,7 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
             }
             case "COUNT":
             case "OPEN_LIST":
+            case "CLOSE_LIST":
             {
                 const {src} = instr
                 const t = handleOf(env, procIndex, pc, src, instr.ext)

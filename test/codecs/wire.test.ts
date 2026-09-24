@@ -13,7 +13,7 @@ import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
 import { encodeInstr, decodeInstr, encodeBody, decodeBody, ir, lowerProgram, proc } from "mog-core"
-import { callCodecInstr, callCodecNextInstr, cloneRdInstr, cloneWrInstr, countInstr, enterInstr, enterNextInstr, hasNextInstr, loadValInstr, openListInstr, readInstr, readSeqInstr, seekInstr, storeValInstr, tagInstr, writeInstr, writeSeqInstr, initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr } from "../../src/codecs/engine/codec-ext-instr"
+import { callCodecInstr, callCodecNextInstr, cloneRdInstr, cloneWrInstr, countInstr, enterInstr, enterNextInstr, hasNextInstr, loadValInstr, openListInstr, closeListInstr, readInstr, readSeqInstr, seekInstr, storeValInstr, tagInstr, writeInstr, writeSeqInstr, initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr } from "../../src/codecs/engine/codec-ext-instr"
 import type { CodecExtInstr } from "../../src/codecs/engine/codec-ext-instr"
 import type { ExtInstrOf, Extension } from "mog-core"
 import { struct, union, unit, u8, list } from "../../src/core/index"
@@ -90,12 +90,16 @@ const rows: Row[] = [
     { byte: 220, instr: seekInstr(3, -1) },
     { byte: 220, instr: seekInstr(4, 0) },
 
-    // CRYPTO sub-code — 221, the crypto extension point; 222..224 spare, reserved
+    // CRYPTO sub-code — 221, the crypto extension point; 222 is CLOSE_LIST; 223..224 spare, reserved
     { byte: 221, instr: initInstr(0, "CRC-32/ISO-HDLC", []) },
     { byte: 221, instr: absorbInstr(0, 1, 0) },
     { byte: 221, instr: finalInstr(0, 0) },
     { byte: 221, instr: verifyInstr(0, 0, 7) },
     { byte: 221, instr: absorbRestInstr(0, 1) },
+
+    // CLOSE_LIST src — one code, 222; src always LEB128'd
+    { byte: 222, instr: closeListInstr(0) },
+    { byte: 222, instr: closeListInstr(4) },
 
     // CALL_CODEC codec_idx, src, ref — base 225, compact = src*4+ref
     { byte: 225, instr: callCodecInstr(7, 0, 0) },
@@ -152,15 +156,25 @@ describe("wire.ts — representative byte table", () =>
 
 describe("wire.ts — opcode-space budget", () =>
 {
-    test("every code but the three spare after CRYPTO decodes", () =>
+    test("every code but the two spare after CRYPTO and CLOSE_LIST decodes", () =>
     {
         for (let b = 128; b <= 255; b++)
         {
-            if (b >= 222 && b <= 224)
+            if (b >= 223 && b <= 224)
                 assert.throws(() => decodeInstr(Uint8Array.of(b, 0, 0, 0, 0, 0), 0, ext), /reserved and unassigned/, `byte ${b} is spare`)
             else
                 assert.doesNotThrow(() => decodeInstr(Uint8Array.of(b, 0, 0, 0, 0, 0), 0, ext), `byte ${b} should decode`)
         }
+    })
+})
+
+describe("wire.ts — CLOSE_LIST", () =>
+{
+    test("is byte 222, its slot always LEB128'd", () =>
+    {
+        assert.deepEqual(encodeInstr(closeListInstr(0), ext), [222, 0])
+        assert.deepEqual(encodeInstr(closeListInstr(300), ext), [222, 0xAC, 0x02])
+        assert.deepEqual(decodeInstr(Uint8Array.of(222, 0xAC, 0x02), 0, ext).instr, closeListInstr(300))
     })
 })
 

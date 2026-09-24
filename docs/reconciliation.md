@@ -329,14 +329,14 @@ encode:  host ─toWire─▶ y ─[validate]─▶ y ∈ D_local ─[bridge g�
 |---|---|---|
 | integer | `STORE_VAL` | `LOAD_VAL` |
 | union | `CALL_CODEC` on a variant edge | `TAG` (`tagOf`) |
-| list length | each append (`ENTER_NEXT`, `CALL_CODEC_NEXT`) | `COUNT`, and the length `elementAt` iterates to |
+| list length | each append (`ENTER_NEXT`, `CALL_CODEC_NEXT`), then `CLOSE_LIST` | `COUNT`, and the length `elementAt` iterates to |
 | bulk transfer | `READ_SEQ` | `WRITE_SEQ` |
 
 - A partial element type turns a bulk transfer into a per-element loop, so a raw-buffer fast path (codec-extension.md §3.5) applies only to total edges.
-- The `under` check on decode sits at the list's close, once the count is known: the return of the list's procedure. A checked list that is not its procedure's root is a codegen error.
+- Decode's length checks and `pad` sit at the list's close, codec-extension.md's `CLOSE_LIST`, once the count is known. A checked list that is never closed is a codegen error.
 - A range check runs on the plain number: after sign extension and before `fromWire` on decode, before `toWire` on encode.
 - `truncate` on decode keeps running the codec, so the cursor stays right, and drops the appends past `maxLength`. On encode it presents a shortened view to `COUNT` and iteration.
-- `pad` appends element defaults at close on decode; on encode it presents a lengthened view.
+- `pad` appends element defaults at `CLOSE_LIST` on decode; on encode it presents a lengthened view.
 
 ### 5.4 Failure delivery
 

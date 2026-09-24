@@ -55,8 +55,8 @@
  * (codec-extension.ts), read from `acc` at runtime, not wire-encoded.
  *
  * `SEEK` is one code, `iter` always LEB128'd; its four former compact codes
- * are `CRYPTO` and three spare, reserved codes, so every later band keeps
- * its bytes. `CRYPTO` is the crypto ops' extension point: an unsigned
+ * are `CRYPTO`, `CLOSE_LIST` (its slot always LEB128'd) and two spare,
+ * reserved codes, so every later band keeps its bytes. `CRYPTO` is the crypto ops' extension point: an unsigned
  * LEB128 sub-code (`CRYPTO_OPCODES`' index), then that op's own operands
  * (the workspace's docs/crypto.md §2.1).
  */
@@ -68,7 +68,7 @@ import type { DirectOpcode, CryptoOpcode } from "./opcodes"
 import type { CodecExtInstr } from "./codec-ext-instr"
 import type { CryptoParam } from "./crypto/crypto"
 import {
-    enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr,
+    enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr, closeListInstr,
     readInstr, writeInstr, hasNextInstr, cloneRdInstr, cloneWrInstr, seekInstr,
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
     initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
@@ -113,6 +113,16 @@ interface Band
     readonly width: number
     readonly encode: (operands: readonly number[]) => { code: number; rest: number[] }
     readonly decode: (code: number, bytes: Uint8Array, pos: number) => { operands: number[]; next: number }
+}
+
+/** One code, its single index operand always LEB128'd. `operands = [idx]`. */
+function leb128IndexBand(): Band
+{
+    return {
+        width: 1,
+        encode: ([idx]) => ({ code: 0, rest: encodeLeb128(idx!) }),
+        decode: (_code, bytes, pos) => { const r = decodeLeb128(bytes, pos); return { operands: [r.value], next: r.next } },
+    }
 }
 
 /** `LOAD_VAL`/`STORE_VAL`/`COUNT`/`TAG`/`OPEN_LIST`/`HAS_NEXT` — a single
@@ -354,6 +364,7 @@ const BAND_BY_OP: Readonly<Record<DirectOpcode, Band>> = {
     CLONE_RD: impliedNextBand("src-dst"),
     CLONE_WR: impliedNextBand("src-dst"),
     SEEK: seekBand(),
+    CLOSE_LIST: leb128IndexBand(),
     CALL_CODEC: callCodecBand(),
     CALL_CODEC_NEXT: callCodecNextBand(),
     WRITE_SEQ: writeSeqBand(),
@@ -376,7 +387,8 @@ for (const op of DIRECT_OPCODES)
 {
     BASE_BY_OP.set(op, TOTAL_CODES)
     TOTAL_CODES += BAND_BY_OP[op].width
-    if (op === "SEEK") { CRYPTO_CODE = TOTAL_CODES; TOTAL_CODES += 4 }
+    if (op === "SEEK") { CRYPTO_CODE = TOTAL_CODES; TOTAL_CODES += 1 }
+    if (op === "CLOSE_LIST") TOTAL_CODES += 2
 }
 
 // isa-core.md §5.1: the extension owns exactly the top 128 codes (bytes
@@ -420,6 +432,7 @@ function operandsOf(instr: DirectInstr): readonly number[]
         case "COUNT": return [instr.src]
         case "TAG": return [instr.src]
         case "OPEN_LIST": return [instr.src]
+        case "CLOSE_LIST": return [instr.src]
         case "READ": return [instr.iter, instr.width]
         case "WRITE": return [instr.iter, instr.width]
         case "HAS_NEXT": return [instr.iter]
@@ -449,6 +462,7 @@ function fromOperands(op: DirectOpcode, operands: readonly number[]): ExtInstrOf
         case "COUNT": return countInstr(operands[0]!)
         case "TAG": return tagInstr(operands[0]!)
         case "OPEN_LIST": return openListInstr(operands[0]!)
+        case "CLOSE_LIST": return closeListInstr(operands[0]!)
         case "READ": return readInstr(operands[0]!, operands[1]!)
         case "WRITE": return writeInstr(operands[0]!, operands[1]!)
         case "HAS_NEXT": return hasNextInstr(operands[0]!)

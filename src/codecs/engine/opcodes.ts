@@ -37,6 +37,7 @@ export const DIRECT_OPCODES = [
     "CLONE_RD",
     "CLONE_WR",
     "SEEK",
+    "CLOSE_LIST",
     "CALL_CODEC", "CALL_CODEC_NEXT",
     "WRITE_SEQ", "READ_SEQ",
 ] as const

@@ -82,6 +82,7 @@ ir`
     {
         call_codec_next(${resolve(match.elementType, undefined)}, 0); left = left - 1;
     }
+    close_list(0);
 `)
 
 // ── List<Integer> — the same length-prefixed layout, but the element run
@@ -108,6 +109,7 @@ ir`
     left = read(0, ${countPrefixWidth(match.maxLength)});
     open_list(0);
     read_seq(0, 0, ${intWireSize(match.elementMatch)}, ${match.elementMatch.min < 0 ? 1 : 0}, left);
+    close_list(0);
 `)
 
 /** Byte width of a standalone union's tag, sized to its actual variant

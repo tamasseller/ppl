@@ -10,9 +10,10 @@
 import { describe, test } from "node:test"
 import * as assert from "node:assert/strict"
 
+import { ir } from "mog-core"
 import type { SemanticType } from "../../src/core/index"
-import { struct, u8, u16, integer, named, list, bytes } from "../../src/core/index"
-import { buildCodec, binaryEncodeRules, binaryDecodeRules } from "../../src/codecs/index"
+import { struct, u8, u16, integer, named, list, bytes, pStruct, pList, pInteger } from "../../src/core/index"
+import { buildCodec, binaryEncodeRules, binaryDecodeRules, codecRule } from "../../src/codecs/index"
 import type { CodecImage } from "../../src/codecs/index"
 
 import { generateBridgingCodecModule } from "../../src/target-js/engine/bridging-codec-module"
@@ -191,3 +192,51 @@ describe("list lengths (§4.7): bridged", () =>
         assert.deepEqual(bridged(Image, Local).decode(plain(Image).encode([1, 300, 2])), [1, 255, 2])
     })
 })
+
+describe("CLOSE_LIST: a list decoded inline, in its parent's procedure", () =>
+{
+    /** Decodes `struct({items: list(...)})` without a list procedure: the list
+     *  is opened below slot 0. `close` false leaves out the close_list. */
+    const inlineListDecode = (close: boolean) => codecRule(pStruct({ items: pList(pInteger(0, 255)) }), (_m, _ctx: void, _resolve, s) =>
+    {
+        const items = s.slot().enter(s.o0, 0)
+        const elem = s.slot().enterNext(items)
+        return ir`
+            ${items.code}
+            u32 left = 0;
+            left = read(${s.i0}, 1);
+            open_list(${items});
+            while (left != 0) { ${elem.code} store_val(${elem}, read(${s.i0}, 1)); left = left - 1; }
+            ${close ? ir`close_list(${items});` : ir``}
+        `
+    })
+
+    const inline = (rootType: SemanticType, close = true): Codec =>
+    {
+        const mod = loadGenerated(generateCodecModule({
+            name: "T", rootType,
+            encodeProgram: buildCodec(rootType, binaryEncodeRules, undefined),
+            decodeProgram: buildCodec(rootType, [inlineListDecode(close), ...binaryDecodeRules], undefined),
+        }))
+        return { encode: mod.encodeT, decode: mod.decodeT }
+    }
+
+    test("the list reaches its parent at the close", () =>
+    {
+        const T = named("T", struct({ items: list(u8) }))
+        assert.deepEqual(inline(T).decode(Uint8Array.from([2, 7, 9])), { items: [7, 9] })
+    })
+
+    test("its length is checked at the close, below slot 0", () =>
+    {
+        const T = named("T", struct({ items: list(u8, { maxLength: 2 }) }))
+        assert.throws(() => inline(T).decode(Uint8Array.from([3, 7, 9, 1])), /malformed length at T\.items: 3 is outside 0\.\.2/)
+    })
+
+    test("a list opened below slot 0 and never closed fails codegen", () =>
+    {
+        const T = named("T", struct({ items: list(u8) }))
+        assert.throws(() => inline(T, false), /list at T\.items is opened but never closed/)
+    })
+})
+

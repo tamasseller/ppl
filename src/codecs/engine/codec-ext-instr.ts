@@ -30,6 +30,7 @@ export type CodecExtInstr =
     | { ext: "COUNT"; src: number }
     | { ext: "TAG"; src: number }
     | { ext: "OPEN_LIST"; src: number }
+    | { ext: "CLOSE_LIST"; src: number }
     | { ext: "READ"; iter: number; width: number }
     | { ext: "WRITE"; iter: number; width: number }
     | { ext: "HAS_NEXT"; iter: number }
@@ -66,6 +67,9 @@ export const tagInstr = (src: number): ExtInstrOf<CodecExtInstr> =>
 
 export const openListInstr = (src: number): ExtInstrOf<CodecExtInstr> =>
     ({ op: "EXT", ext: "OPEN_LIST", src })
+
+export const closeListInstr = (src: number): ExtInstrOf<CodecExtInstr> =>
+    ({ op: "EXT", ext: "CLOSE_LIST", src })
 
 export const readInstr = (iter: number, width: number): ExtInstrOf<CodecExtInstr> =>
     ({ op: "EXT", ext: "READ", iter, width })

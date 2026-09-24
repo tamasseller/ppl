@@ -302,13 +302,13 @@ export function generateProcedure(
 ): string
 {
     const slotTypes = new Map<number, TypeNode>(entryNode ? [[0, entryNode]] : [])
-    const {maxSlot, listTraversalSlots, clones, cryptos} = prescan(raised.body)
+    const {maxSlot, listTraversalSlots, clones, cryptos, closedLists} = prescan(raised.body)
     const cryptoDecl = cryptos > 0 ? `let ${Array.from({length: cryptos}, (_, i) => `c${i}!: CryptoContext`).join(", ")};` : undefined
     const correspondences = entryCorrespondence ? new Map([[0, entryCorrespondence]]) : undefined
     const slotPaths = new Map<number, string>(entryNode ? [[0, entryCorrespondence?.path ?? entryPath ?? describeType(entryNode)]] : [])
     const g: GenCtx = {
         direction, slotTypes, projection, writeBacks: new Map(), idxDeclared: new Set(), tempCounter: {n: 0}, correspondences,
-        slotPaths, lenDeclared: new Set(), procName: `${direction}_proc${index}`, hoisted: [],
+        slotPaths, lenDeclared: new Set(), closedLists, procName: `${direction}_proc${index}`, hoisted: [],
     }
 
     const b = new LineBuilder()

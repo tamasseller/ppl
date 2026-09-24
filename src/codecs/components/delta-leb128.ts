@@ -138,7 +138,7 @@ function deltaDecodeBody(leb128: Procedure, s: CodecScope): IrFragment
         u32 left = 0;
         left = read(${s.i0}, 1);
         open_list(${s.o0});
-        if (left == 0) { return; }
+        if (left == 0) { close_list(${s.o0}); return; }
         u32 zz = 0;
         u32 prev = 0;
         u32 delta = 0;
@@ -156,6 +156,7 @@ function deltaDecodeBody(leb128: Procedure, s: CodecScope): IrFragment
             store_val(${elem}, prev);
             left = left - 1;
         }
+        close_list(${s.o0});
     `
 }
 

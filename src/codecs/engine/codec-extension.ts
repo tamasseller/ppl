@@ -28,7 +28,7 @@ import { assertNever } from "./opcodes"
 import { codecWireCodec } from "./wire"
 import type { CodecExtInstr } from "./codec-ext-instr"
 import {
-    enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr,
+    enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr, closeListInstr,
     readInstr, writeInstr, hasNextInstr, cloneRdInstr, cloneWrInstr, seekInstr,
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
     initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
@@ -194,6 +194,7 @@ export const CODEC_EFFECTS: Readonly<Record<CodecOpcode, ExtOpEffect<CodecExtIns
     COUNT:      { tosDelta: 0, maxTransient: 0, writesAcc: true },
     TAG:        { tosDelta: 0, maxTransient: 0, writesAcc: true },
     OPEN_LIST:  { tosDelta: 0, maxTransient: 0, killsAcc: true },
+    CLOSE_LIST: { tosDelta: 0, maxTransient: 0, killsAcc: true },
     READ:       { tosDelta: 0, maxTransient: 0, writesAcc: true },
     WRITE:      { tosDelta: 0, maxTransient: 0, readsAcc: true },
     HAS_NEXT:   { tosDelta: 0, maxTransient: 0, writesAcc: true },
@@ -306,6 +307,9 @@ export function codecRules(_resolveLocal: (name: string) => number, resolveCalle
 
         rule("codec:open_list", pBuiltinCall("open_list", pConst()), m =>
             leafNode<CodecExtInstr>(["acc"], [openListInstr(m.argumentMatches[0].value)], [], 0, 0)),
+
+        rule("codec:close_list", pBuiltinCall("close_list", pConst()), m =>
+            leafNode<CodecExtInstr>(["acc"], [closeListInstr(m.argumentMatches[0].value)], [], 0, 0)),
 
         rule("codec:read", pBuiltinCall("read", pConst(), pConst()), m =>
         {
@@ -651,6 +655,13 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const h = frame[src]
                 if(!h) throw new Error(`codec extension: OPEN_LIST on unbound handle ${src}`)
                 set(h, []) // capacity hint in acc intentionally ignored — §3.4
+                return
+            }
+
+            // Handles write through to the parent, so the list is already in place.
+            case "CLOSE_LIST":
+            {
+                if(!frame[instr.src]) throw new Error(`codec extension: CLOSE_LIST on unbound handle ${instr.src}`)
                 return
             }
 

@@ -120,7 +120,7 @@ read-only and write-only opcodes onto shared slots:
 | Direction | Handle capability | Opcodes |
 |---|---|---|
 | Encoder | read-only | `LOAD_VAL`, `ENTER` (navigate), `COUNT`, `TAG` |
-| Decoder | write/init-only | `STORE_VAL`, `ENTER` (navigate + instantiate a union variant), `OPEN_LIST` |
+| Decoder | write/init-only | `STORE_VAL`, `ENTER` (navigate + instantiate a union variant), `OPEN_LIST`, `CLOSE_LIST` |
 
 `LOAD_VAL`/`STORE_VAL` occupy one opcode slot; which semantics apply is
 resolved by the program's direction, never encoded per instruction. §4.1
@@ -196,6 +196,7 @@ per row, direction-selected per §2.3):
 | `COUNT [src=o0]` | encoder | `acc` = list length at the handle |
 | `TAG [src=o0]` | encoder | `acc` = union active-variant index at the handle |
 | `OPEN_LIST [src=o0]` | decoder | instantiate the list at the handle; `acc` = capacity hint (target may honor or ignore) |
+| `CLOSE_LIST [src=o0]` | decoder | the list at the handle is complete: a target's write-back point, and where reconciliation.md §5.3's length checks and `pad` run. Required for a list opened below slot 0 or with a checked length |
 
 Deferred until opcode space is measured against real codecs (isa-core.md
 §5.3's reserved-code philosophy): a fused `LOAD_VAL src, ref` /
@@ -392,7 +393,7 @@ executed:
 |---|---|---|---|---|
 | `READ`/`WRITE`/`HAS_NEXT`/`CLONE_*`/`SEEK` | 0 | 0 | no | no |
 | `ENTER`/`ENTER_NEXT` | 0 | 0 | no | no |
-| `LOAD_VAL`/`STORE_VAL`/`COUNT`/`TAG`/`OPEN_LIST` | 0 | 0 | no | no |
+| `LOAD_VAL`/`STORE_VAL`/`COUNT`/`TAG`/`OPEN_LIST`/`CLOSE_LIST` | 0 | 0 | no | no |
 | `CALL_CODEC`/`CALL_CODEC_NEXT` | `−stackArgsOf(argCount)`, popping the pushed argument block as `CALL` does | 0 | no | **yes**: `calleeOperandIndex` is the `codec_idx` operand, `argCount` from the invoked codec's header |
 | `WRITE_SEQ`/`READ_SEQ` (§3.5) | 0 | 0 | no | no |
 
@@ -412,8 +413,8 @@ the real register and never needed it.
 
 Each op also declares isa-core.md §11.2's accumulator effect.
 `LOAD_VAL`/`COUNT`/`TAG`/`READ`/`HAS_NEXT` and both `CALL_CODEC` forms
-*write* it. `ENTER`/`ENTER_NEXT`/`OPEN_LIST`/`CLONE_RD`/`CLONE_WR`/`SEEK`
-*destroy* it: `exec()` leaves `state.acc` alone, but all six are
+*write* it. `ENTER`/`ENTER_NEXT`/`OPEN_LIST`/`CLOSE_LIST`/`CLONE_RD`/`CLONE_WR`/`SEEK`
+*destroy* it: `exec()` leaves `state.acc` alone, but all seven are
 handle/stream work a target reaches through a helper call, where the
 accumulator's own register is an argument register. Declaring it is what
 keeps a lowering from carrying a value across one.
@@ -451,7 +452,8 @@ do.
 | `READ` / `WRITE` | `N·`\|`WIDTHS`\|` + `\|`WIDTHS`\| = 15 (each) | 1 code per `(iter, width)`, `iter < N` | 1 code per `width` + `iter` LEB128; `width` is never LEB128'd |
 | `CLONE_RD` / `CLONE_WR` | `N + 1` = 5 (each) | 1 code per `src < N`, `dst = src+1` implied | `src, dst` both LEB128 |
 | `SEEK` | 1 | none | `iter` LEB128 + `delta` zigzag-LEB128 |
-| `CRYPTO`, then 3 spare, reserved | 4 | none | LEB128 sub-code, then that crypto op's operands (the workspace's docs/crypto.md §2.1) |
+| `CRYPTO` | 1 | none | LEB128 sub-code, then that crypto op's operands (the workspace's docs/crypto.md §2.1) |
+| `CLOSE_LIST`, then 2 spare, reserved | 3 | none | `src` LEB128 |
 | `CALL_CODEC` | `N² + 1` = 17 | 1 code per `(src, ref)` pair + `codec_idx` LEB128 | `codec_idx, src, ref` all LEB128 |
 | `CALL_CODEC_NEXT` | `N + 1` = 5 | 1 code per `src < N` + `codec_idx` LEB128 | `codec_idx, src` both LEB128 |
 | `WRITE_SEQ` (§3.5) | \|`WIDTHS`\| = 3 | none | 1 code per `w`; `iter, handle` both LEB128 |
@@ -460,8 +462,8 @@ do.
 The original 15 opcodes total 119 codes (bytes 128-246), and
 `WRITE_SEQ`/`READ_SEQ` spend the remaining 9 (3 + 6), filling bytes
 128-255. `SEEK` gave up its compact forms for `CRYPTO` (byte 221), the crypto ops'
-extension point, and three spare, reserved codes (222-224), so no other
-band moved. Neither gets a compact `iter`/`handle` form:
+extension point, `CLOSE_LIST` (byte 222) and two spare, reserved codes
+(223-224), so no other band moved. Neither gets a compact `iter`/`handle` form:
 this op already replaces a whole per-element loop, so its per-*list* cost
 of a few LEB128 bytes amortizes across every element it transfers, unlike
 `READ`/`WRITE`'s per-*element* cost, and there was no codespace left for
@@ -496,7 +498,7 @@ accumulator. Two checks fall out:
   sibling: entered against the right kind, at an index that exists.
   `WRITE_SEQ`/`READ_SEQ` (§3.5) get the same treatment for their `handle`
   operand, which must resolve to a list-kind handle, exactly as
-  `COUNT`/`OPEN_LIST` do.
+  `COUNT`/`OPEN_LIST`/`CLOSE_LIST` do.
 - **Cross-procedure consistency.** At every
   `CALL_CODEC`/`CALL_CODEC_NEXT`, the callee's declared object type (its
   `o0` type, fixed at the callee's build time and pinned like any other
