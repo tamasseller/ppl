@@ -1,7 +1,7 @@
 /**
  * codecs — Codec extension (docs/codec-extension.md)
  *
- * Implements `mog-core`'s `Extension` hook for all 17 opcodes
+ * Implements `mog-core`'s `Extension` hook for all 22 opcodes
  * `./opcodes.ts` names (§2/§3), plus `codecRules()`, their `ir\`...\`` DSL
  * surface. Lives here rather than `mog-core` because that package must
  * stay protocol-agnostic; conceptually it's still core infrastructure, not
@@ -19,8 +19,8 @@
  */
 
 import type { Extension, ExecState, ExtOpEffect } from "mog-core"
-import type { Rule } from "mog-core"
-import { rule, leafNode, unaryNode, pBuiltinCall, pConst, pIdentifier, pRtl } from "mog-core"
+import type { Rule, LiteralMatch, StringMatch, BytesMatch } from "mog-core"
+import { rule, leafNode, unaryNode, pBuiltinCall, pConst, pIdentifier, pRtl, pString, pImmediate, pTail } from "mog-core"
 import type { IntegerType, TypeNode, Direction } from "../../core/index"
 import { kindOf, SemanticTypeKinds } from "../../core/index"
 import type { CodecOpcode } from "./opcodes"
@@ -31,9 +31,22 @@ import {
     enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr,
     readInstr, writeInstr, hasNextInstr, cloneRdInstr, cloneWrInstr, seekInstr,
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
+    initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
 } from "./codec-ext-instr"
+import type { CryptoContext, CryptoParam } from "./crypto/crypto"
+import { createCryptoContext, integerParamBytes } from "./crypto/crypto"
 
 export type { Direction }
+
+/** The trap code for a read past the stream's end, in both the interpreter
+ *  and generated code: `-1`, never a code a program's own `TRAP` carries. */
+export const PAST_END_TRAP = -1
+
+function pastEnd(state: ExecState): never
+{
+    if(!state.trap) throw new Error(`codec extension: read past the stream's end under an evaluator that cannot trap`)
+    return state.trap(PAST_END_TRAP)
+}
 
 /** Smallest byte width that fits an integer type's declared range — the
  *  source of truth for both `../components/binary-rules.ts` (which byte
@@ -201,6 +214,27 @@ export const CODEC_EFFECTS: Readonly<Record<CodecOpcode, ExtOpEffect<CodecExtIns
     // per-element pump loop (§11's "generic semantics first" split).
     WRITE_SEQ: { tosDelta: 0, maxTransient: 0, readsAcc: true },
     READ_SEQ:  { tosDelta: 0, maxTransient: 0, readsAcc: true },
+    INIT:   { tosDelta: 0, maxTransient: 0, killsAcc: true },
+    ABSORB: { tosDelta: 0, maxTransient: 0, killsAcc: true },
+    FINAL:  { tosDelta: 0, maxTransient: 0, killsAcc: true },
+    VERIFY: { tosDelta: 0, maxTransient: 0, killsAcc: true },
+    ABSORB_REST: { tosDelta: 0, maxTransient: 0, killsAcc: true },
+}
+
+/** `crypto_init`'s tail read as name/value pairs. */
+function cryptoParams(alg: string, tail: readonly (LiteralMatch | StringMatch | BytesMatch)[]): CryptoParam[]
+{
+    if(tail.length % 2 !== 0) throw new Error(`crypto_init("${alg}"): parameters come in name/value pairs, got ${tail.length} argument(s)`)
+    const params: CryptoParam[] = []
+    for(let i = 0; i < tail.length; i += 2)
+    {
+        const name = tail[i]!, value = tail[i + 1]!
+        if(name.kind !== "String") throw new Error(`crypto_init("${alg}"): parameter ${i / 2} has no string name`)
+        if(params.some(p => p.name === name.value)) throw new Error(`crypto_init("${alg}"): parameter "${name.value}" given twice`)
+        if(value.kind === "String") throw new Error(`crypto_init("${alg}"): parameter "${name.value}" is a string; values are integers or byte strings`)
+        params.push({ name: name.value, value: value.kind === "Literal" ? integerParamBytes(value.value) : value.value })
+    }
+    return params
 }
 
 /** The codec extension's `Extension.rules` — lets codec bodies be authored
@@ -352,6 +386,36 @@ export function codecRules(_resolveLocal: (name: string) => number, resolveCalle
             if(calleeIndex === undefined) return undefined
             return leafNode<CodecExtInstr>(["acc"], [callCodecNextInstr(calleeIndex, src.value)], [], 0, 0)
         }),
+
+        rule("codec:crypto_init", pBuiltinCall("crypto_init", pConst(), pString(), pTail(pImmediate())), m =>
+        {
+            const [crypto, alg] = m.argumentMatches
+            return leafNode<CodecExtInstr>(["acc"], [initInstr(crypto.value, alg.value, cryptoParams(alg.value, m.tailMatches!))], [], 0, 0)
+        }),
+
+        rule("codec:absorb", pBuiltinCall("absorb", pConst(), pConst(), pConst()), m =>
+        {
+            const [crypto, src, end] = m.argumentMatches
+            return leafNode<CodecExtInstr>(["acc"], [absorbInstr(crypto.value, src.value, end.value)], [], 0, 0)
+        }),
+
+        rule("codec:absorb_rest", pBuiltinCall("absorb_rest", pConst(), pConst()), m =>
+        {
+            const [crypto, src] = m.argumentMatches
+            return leafNode<CodecExtInstr>(["acc"], [absorbRestInstr(crypto.value, src.value)], [], 0, 0)
+        }),
+
+        rule("codec:final", pBuiltinCall("final", pConst(), pConst()), m =>
+        {
+            const [crypto, iter] = m.argumentMatches
+            return leafNode<CodecExtInstr>(["acc"], [finalInstr(crypto.value, iter.value)], [], 0, 0)
+        }),
+
+        rule("codec:verify", pBuiltinCall("verify", pConst(), pConst(), pConst()), m =>
+        {
+            const [crypto, iter, code] = m.argumentMatches
+            return leafNode<CodecExtInstr>(["acc"], [verifyInstr(crypto.value, iter.value, code.value)], [], 0, 0)
+        }),
     ]
 }
 
@@ -480,8 +544,25 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
     const frames: Frame[] = [[root]]
     const i0: StreamIter = { pos: 0, capability: direction === "encode" ? "write" : "read", overwriteOnly: false }
     const forkFrames: Forks[] = [[]]
+    const cryptoFrames: (CryptoContext | undefined)[][] = [[]]
     const top = (): Frame => frames[frames.length - 1]!
     const forks = (): Forks => forkFrames[forkFrames.length - 1]!
+    const cryptos = (): (CryptoContext | undefined)[] => cryptoFrames[cryptoFrames.length - 1]!
+
+    function cryptoAt(id: number, opName: string): CryptoContext
+    {
+        const c = cryptos()[id]
+        if(!c) throw new Error(`codec extension: ${opName} on crypto handle ${id}, which has no live context (INIT before use?)`)
+        return c
+    }
+
+    /** Spends handle `id`'s context, which must be re-`INIT`ed to be used again. */
+    function finishCrypto(id: number, opName: string): number[]
+    {
+        const bytes = cryptoAt(id, opName).final()
+        cryptos()[id] = undefined
+        return bytes
+    }
 
     function iterAt(id: number): StreamIter
     {
@@ -578,9 +659,10 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const { iter: iterId, width } = instr
                 const it = iterAt(iterId)
                 if(it.capability !== "read") throw new Error(`codec extension: READ on write-only iterator ${iterId}`)
+                if(it.pos + width > buffer.length) return pastEnd(state)
                 let value = 0
                 for(let byte = 0; byte < width; byte++)
-                    value |= (buffer[it.pos++] ?? 0) << (8 * byte)
+                    value |= buffer[it.pos++]! << (8 * byte)
                 state.acc = value >>> 0
                 return
             }
@@ -639,8 +721,9 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const child = computeChild(frame, src, ref, direction)
                 frames.push([child])
                 forkFrames.push([])
+                cryptoFrames.push([])
                 try { state.acc = state.callProc(calleeIndex, []) }
-                finally { frames.pop(); forkFrames.pop() }
+                finally { frames.pop(); forkFrames.pop(); cryptoFrames.pop() }
                 return
             }
 
@@ -650,8 +733,9 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 const child = computeNext(frame, src, direction)
                 frames.push([child])
                 forkFrames.push([])
+                cryptoFrames.push([])
                 try { state.acc = state.callProc(calleeIndex, []) }
-                finally { frames.pop(); forkFrames.pop() }
+                finally { frames.pop(); forkFrames.pop(); cryptoFrames.pop() }
                 return
             }
 
@@ -694,15 +778,71 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
                 if(!h) throw new Error(`codec extension: READ_SEQ on unbound handle ${handleId}`)
                 const arr = get(h) as number[]
                 const count = state.acc
+                if(it.pos + width * count > buffer.length) return pastEnd(state)
                 for(let i = 0; i < count; i++)
                 {
                     let value = 0
                     for(let byte = 0; byte < width; byte++)
-                        value |= (buffer[it.pos++] ?? 0) << (8 * byte)
+                        value |= buffer[it.pos++]! << (8 * byte)
                     value = value >>> 0
                     arr[i] = signed ? signExtend(width * 8, value) : value
                 }
                 return
+            }
+
+            case "INIT":
+            {
+                const { crypto, alg, params } = instr
+                cryptos()[crypto] = createCryptoContext(alg, params)
+                return
+            }
+
+            case "ABSORB":
+            {
+                const { crypto, src, end } = instr
+                const it = iterAt(src)
+                if(it.capability !== "read") throw new Error(`codec extension: ABSORB from write-only iterator ${src}`)
+                const until = iterAt(end).pos
+                if(it.pos > until) throw new Error(`codec extension: ABSORB: iterator ${src} is already past iterator ${end}`)
+                cryptoAt(crypto, "ABSORB").absorb(buffer, it.pos, until)
+                it.pos = until
+                return
+            }
+
+            case "ABSORB_REST":
+            {
+                const { crypto, src } = instr
+                const it = iterAt(src)
+                if(it.capability !== "read") throw new Error(`codec extension: ABSORB_REST from write-only iterator ${src}`)
+                const until = Math.max(it.pos, buffer.length)
+                cryptoAt(crypto, "ABSORB_REST").absorb(buffer, it.pos, until)
+                it.pos = until
+                return
+            }
+
+            case "FINAL":
+            {
+                const { crypto, iter: iterId } = instr
+                const it = iterAt(iterId)
+                if(it.capability !== "write") throw new Error(`codec extension: FINAL on read-only iterator ${iterId}`)
+                const bytes = finishCrypto(crypto, "FINAL")
+                if(it.overwriteOnly && it.pos + bytes.length > buffer.length)
+                    throw new Error(`codec extension: iterator ${iterId} (a CLONE_WR fork) can't append — only i0 appends (§2.1)`)
+                for(const b of bytes) buffer[it.pos++] = b
+                return
+            }
+
+            case "VERIFY":
+            {
+                const { crypto, iter: iterId, code } = instr
+                const it = iterAt(iterId)
+                if(it.capability !== "read") throw new Error(`codec extension: VERIFY on write-only iterator ${iterId}`)
+                const expected = finishCrypto(crypto, "VERIFY")
+                let match = true
+                for(const b of expected) match = buffer[it.pos++] === b && match
+                if(match) return
+                if(!state.trap) throw new Error(`codec extension: VERIFY failed (code ${code}) under an evaluator that cannot trap`)
+                return state.trap(code)
             }
 
             default:

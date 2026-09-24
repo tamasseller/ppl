@@ -55,6 +55,10 @@ type HandleEnv = Map<number, TypeNode>
 type IterCapability = "read" | "write" | "any"
 type IterEnv = Map<number, IterCapability>
 
+/** Crypto handles holding a live context: `INIT` adds one, `FINAL`/
+ *  `VERIFY` spend it. Frame-scoped like forks, so exact. */
+type CryptoEnv = Set<number>
+
 function fail(procIndex: number, pc: number, message: string): never
 {
     throw new Error(`codec validation: procedure ${procIndex}, instruction ${pc}: ${message}`)
@@ -114,6 +118,11 @@ function requireCapability(cap: IterCapability, need: "read" | "write", procInde
         fail(procIndex, pc, `${opName}: iterator ${id} is ${cap}-only, not ${need}`)
 }
 
+function liveCrypto(env: CryptoEnv, procIndex: number, pc: number, id: number, opName: string): void
+{
+    if(!env.has(id)) fail(procIndex, pc, `${opName}: crypto handle ${id} has no live context in this procedure (INIT first)`)
+}
+
 function checkCalleeType(program: RtlProgram<CodecExtInstr>, codecIdx: number, childType: TypeNode, procIndex: number, pc: number, opName: string): void
 {
     const callee = program.procedures[codecIdx]
@@ -140,7 +149,7 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
     // Switching on `instr.ext` directly (not a separately-assigned `op`
     // local) is what lets each case below narrow `instr` itself to its
     // own variant and read named fields straight off it.
-    function handleExt(instr: CodecExtInstr, env: HandleEnv, iterEnv: IterEnv, pc: number): void
+    function handleExt(instr: CodecExtInstr, env: HandleEnv, iterEnv: IterEnv, cryptoEnv: CryptoEnv, pc: number): void
     {
         switch(instr.ext)
         {
@@ -252,6 +261,34 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
                     fail(procIndex, pc, `${instr.ext}: handle ${handleId} is a ${t.type.kind}, not a list`)
                 return
             }
+            case "INIT":
+                cryptoEnv.add(instr.crypto)
+                return
+            case "ABSORB":
+            {
+                const {crypto, src, end} = instr
+                liveCrypto(cryptoEnv, procIndex, pc, crypto, instr.ext)
+                const cap = iterOf(iterEnv, procIndex, pc, src, instr.ext)
+                if(cap !== "read") fail(procIndex, pc, `ABSORB: iterator ${src} must be a CLONE_RD fork`)
+                iterOf(iterEnv, procIndex, pc, end, instr.ext)
+                return
+            }
+            case "ABSORB_REST":
+            {
+                const {crypto, src} = instr
+                liveCrypto(cryptoEnv, procIndex, pc, crypto, instr.ext)
+                if(iterOf(iterEnv, procIndex, pc, src, instr.ext) !== "read") fail(procIndex, pc, `ABSORB_REST: iterator ${src} must be a CLONE_RD fork`)
+                return
+            }
+            case "FINAL":
+            case "VERIFY":
+            {
+                const {crypto, iter: iterId} = instr
+                liveCrypto(cryptoEnv, procIndex, pc, crypto, instr.ext)
+                requireCapability(iterOf(iterEnv, procIndex, pc, iterId, instr.ext), instr.ext === "FINAL" ? "write" : "read", procIndex, pc, iterId, instr.ext)
+                cryptoEnv.delete(crypto)
+                return
+            }
             default:
                 return assertNever(instr)
         }
@@ -265,7 +302,7 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
      *  struct field's ENTER always precedes its own switch, never depends
      *  on a sibling case's bindings; a loop's own ENTER_NEXT always
      *  precedes its own use within the same body block). */
-    function walk(pc: number, env: HandleEnv, iterEnv: IterEnv): {nextPc: number; terminated: boolean}
+    function walk(pc: number, env: HandleEnv, iterEnv: IterEnv, cryptoEnv: CryptoEnv): {nextPc: number; terminated: boolean}
     {
         for(; ;)
         {
@@ -279,18 +316,18 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
             {
                 let p = pc + 1
                 for(let k = 0; k <= instr.imm; k++)
-                    ({nextPc: p} = walk(p, new Map(env), new Map(iterEnv)))
+                    ({nextPc: p} = walk(p, new Map(env), new Map(iterEnv), new Set(cryptoEnv)))
                 pc = p; continue
             }
 
             if(isLoopOpcode(instr.op))
             {
-                const body_ = walk(pc + 1, new Map(env), new Map(iterEnv))
-                const cond = walk(body_.nextPc, new Map(env), new Map(iterEnv))
+                const body_ = walk(pc + 1, new Map(env), new Map(iterEnv), new Set(cryptoEnv))
+                const cond = walk(body_.nextPc, new Map(env), new Map(iterEnv), new Set(cryptoEnv))
                 pc = cond.nextPc; continue
             }
 
-            if(isExtInstr(instr)) {handleExt(instr, env, iterEnv, pc); pc++; continue}
+            if(isExtInstr(instr)) {handleExt(instr, env, iterEnv, cryptoEnv, pc); pc++; continue}
 
             pc++
         }
@@ -298,7 +335,7 @@ function analyzeProcedure(proc: RtlProc<CodecExtInstr>, procIndex: number, progr
 
     const seedEnv: HandleEnv = header ? new Map([[0, header]]) : new Map()
     const seedIterEnv: IterEnv = new Map([[0, "any"]])
-    walk(0, seedEnv, seedIterEnv)
+    walk(0, seedEnv, seedIterEnv, new Set())
 }
 
 /**

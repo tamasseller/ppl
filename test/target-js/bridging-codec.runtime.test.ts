@@ -15,10 +15,11 @@ import { describe, test } from "node:test"
 import * as assert from "node:assert/strict"
 
 import type { SemanticType } from "../../src/core/index"
-import { struct, union, unit, u8, integer, named, buildTypeGraph, list } from "../../src/core/index"
-import { buildCodec, binaryEncodeRules, binaryDecodeRules } from "../../src/codecs/index"
+import { struct, union, unit, u8, u16, integer, named, buildTypeGraph, list, matchType } from "../../src/core/index"
+import { buildCodec, binaryEncodeRules, binaryDecodeRules, framedEncode, framedDecode, encodeCodecImage, decodeCodecImage } from "../../src/codecs/index"
 import type { CodecImage } from "../../src/codecs/index"
 
+import type { CodecTrap } from "../../src/target-js/runtime/codec-runtime"
 import { generateBridgingCodecModule } from "../../src/target-js/engine/bridging-codec-module"
 import { generateCodecModule } from "../../src/target-js/engine/codec-module"
 import { loadGenerated } from "./load-generated"
@@ -239,5 +240,32 @@ describe("bridging: list of structs — per-element divergence propagates throug
 
         const { decode } = loadBridged(image, Local, "Container")
         assert.deepEqual(decode(bytes), { items: [{ a: 1 }, { a: 2 }] })
+    })
+})
+
+describe("bridging: a CRC-framed image", () =>
+{
+    test("bridged codegen frames, verifies and traps exactly as the image's own codec does", () =>
+    {
+        const Image = named("Packet", struct({ id: u8, samples: list(u16) }))
+        const Local = named("Packet", struct({ id: u8, samples: list(u16), extra: integer(0, 255, { default: 0 }) }))
+        const spec = { alg: "CRC-16/IBM-3740", code: 0x51 }
+        const innerOf = (rules: typeof binaryEncodeRules) => rules.find(r => matchType(Image, r.pattern) !== undefined)!
+        const image = decodeCodecImage(encodeCodecImage({
+            typeTree: Image,
+            encoderProgram: buildCodec(Image, [framedEncode(spec, innerOf(binaryEncodeRules), "Packet"), ...binaryEncodeRules], undefined),
+            decoderProgram: buildCodec(Image, [framedDecode(spec, innerOf(binaryDecodeRules), "Packet"), ...binaryDecodeRules], undefined),
+        }))
+
+        const plain = loadGenerated(generateCodecModule({ name: "Packet", rootType: image.typeTree, encodeProgram: image.encoderProgram, decodeProgram: image.decoderProgram }))
+        const bridged = loadBridged(image, Local, "Packet")
+
+        const bytes = bridged.encode({ id: 7, samples: [1, 2, 3], extra: 9 })
+        assert.deepEqual(Array.from(bytes), Array.from(plain.encodePacket({ id: 7, samples: [1, 2, 3] })), "the local-only field leaked onto the wire, or the frame differs")
+        assert.deepEqual(bridged.decode(bytes), { id: 7, samples: [1, 2, 3], extra: 0 })
+
+        const bad = Uint8Array.from(bytes)
+        bad[3]! ^= 1
+        assert.throws(() => bridged.decode(bad), (e: unknown) => e instanceof Error && e.name === "CodecTrap" && (e as CodecTrap).code === 0x51)
     })
 })

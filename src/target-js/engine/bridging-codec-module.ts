@@ -153,7 +153,7 @@ export function generateBridgingCodecModule(opts: BridgingCodecModuleOptions): s
     const valueType = typeResult.get(localGraph.root.id)?.ref ?? "unknown"
 
     return `import { ${RUNTIME_IMPORTS.join(", ")} } from "ppl"
-import type { Ctx } from "ppl"
+import type { Ctx, CryptoContext } from "ppl"
 
 ${emitTSDeclarations(typeResult)}
 ${generateProcedures(image.encoderProgram, encodeCorrespondences, "encode", typeResult)}

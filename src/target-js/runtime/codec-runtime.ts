@@ -21,6 +21,9 @@
  * either).
  */
 
+import type {CryptoContext} from "../../codecs/engine/crypto/crypto"
+import {PAST_END_TRAP} from "../../codecs/engine/codec-extension"
+
 /** TAG: which variant is currently active, as its declaration-order
  *  index — codegen bakes in the variant name list itself (from the
  *  union's own `TypeNode.edges`, in order) and resolves the active
@@ -92,6 +95,14 @@ export interface Iter { pos: number; capability: "read" | "write"; overwriteOnly
  *  `bytes` parameter straight through as `buffer`, no copy either. */
 export interface Ctx { buffer: Uint8Array; length: number; iters: Iter[] }
 
+function requireAvailable(ctx: Ctx, pos: number, bytes: number): void
+{
+    if(pos + bytes > ctx.length)
+    {
+        throw new CodecTrap(PAST_END_TRAP, `read past the stream's end`)
+    }
+}
+
 function iterAt(ctx: Ctx, id: number): Iter
 {
     const it = ctx.iters[id]
@@ -151,7 +162,7 @@ function readBytes(dv: DataView, buffer: Uint8Array, pos: number, width: number)
     let value = 0
     for(let byte = 0; byte < width; byte++)
     {
-        value |= (buffer[pos + byte] ?? 0) << (8 * byte)
+        value |= buffer[pos + byte]! << (8 * byte)
     }
 
     return value >>> 0
@@ -202,6 +213,7 @@ export function read(ctx: Ctx, iterIdx: number, width: number): number
         throw new Error(`codec: READ on write-only iterator ${iterIdx}`)
     }
 
+    requireAvailable(ctx, it.pos, width)
     const value = readBytes(view(ctx), ctx.buffer, it.pos, width)
     it.pos += width
     return value
@@ -334,6 +346,7 @@ export function readSeq(ctx: Ctx, iterIdx: number, arr: number[], width: number,
         throw new Error(`codec: READ_SEQ on write-only iterator ${iterIdx}`)
     }
 
+    requireAvailable(ctx, it.pos, width * count)
     const dv = view(ctx)
     for(let i = 0; i < count; i++)
     {
@@ -372,7 +385,7 @@ export function readSeq(ctx: Ctx, iterIdx: number, arr: number[], width: number,
  *  field, not something this helper works around. */
 export function readSeqView<A extends ArrayBufferView>(
     ctx: Ctx, iterIdx: number,
-    ctor: new (buffer: ArrayBufferLike, byteOffset: number, length: number) => A,
+    ctor: (new (buffer: ArrayBufferLike, byteOffset: number, length: number) => A) & {readonly BYTES_PER_ELEMENT: number},
     count: number,
 ): A
 {
@@ -381,6 +394,8 @@ export function readSeqView<A extends ArrayBufferView>(
     {
         throw new Error(`codec: READ_SEQ on write-only iterator ${iterIdx}`)
     }
+
+    requireAvailable(ctx, it.pos, ctor.BYTES_PER_ELEMENT * count)
 
     const result = new ctor(ctx.buffer.buffer, ctx.buffer.byteOffset + it.pos, count)
     it.pos += result.byteLength
@@ -439,5 +454,81 @@ export class CodecTrap extends Error
     {
         super(reason ? `codec trap ${code}: ${reason}` : `codec trap ${code}`)
         this.name = "CodecTrap"
+    }
+}
+
+// ── Crypto contexts (the workspace's docs/crypto.md) ─────────────────────
+
+/** Advance reader `srcIdx` to `endIdx`'s position, absorbing what it passes. */
+export function cryptoAbsorb(ctx: Ctx, c: CryptoContext, srcIdx: number, endIdx: number): void
+{
+    const it = iterAt(ctx, srcIdx)
+    if(it.capability !== "read")
+    {
+        throw new Error(`codec: ABSORB from write-only iterator ${srcIdx}`)
+    }
+
+    const until = iterAt(ctx, endIdx).pos
+    if(it.pos > until)
+    {
+        throw new Error(`codec: ABSORB: iterator ${srcIdx} is already past iterator ${endIdx}`)
+    }
+
+    c.absorb(ctx.buffer, it.pos, until)
+    it.pos = until
+}
+
+/** Advance reader `srcIdx` to the stream's end, absorbing what it passes. */
+export function cryptoAbsorbRest(ctx: Ctx, c: CryptoContext, srcIdx: number): void
+{
+    const it = iterAt(ctx, srcIdx)
+    if(it.capability !== "read")
+    {
+        throw new Error(`codec: ABSORB_REST from write-only iterator ${srcIdx}`)
+    }
+
+    const until = Math.max(it.pos, ctx.length)
+    c.absorb(ctx.buffer, it.pos, until)
+    it.pos = until
+}
+
+export function cryptoFinal(ctx: Ctx, c: CryptoContext, iterIdx: number): void
+{
+    const it = iterAt(ctx, iterIdx)
+    if(it.capability !== "write")
+    {
+        throw new Error(`codec: FINAL on read-only iterator ${iterIdx}`)
+    }
+
+    const bytes = c.final()
+    if(it.overwriteOnly && it.pos + bytes.length > ctx.length)
+    {
+        throw new Error(`codec: iterator ${iterIdx} (a CLONE_WR fork) can't append — only the root iterator appends`)
+    }
+
+    ensureCapacity(ctx, it.pos + bytes.length)
+    ctx.buffer.set(bytes, it.pos)
+    it.pos += bytes.length
+    ctx.length = Math.max(ctx.length, it.pos)
+}
+
+export function cryptoVerify(ctx: Ctx, c: CryptoContext, iterIdx: number, code: number): void
+{
+    const it = iterAt(ctx, iterIdx)
+    if(it.capability !== "read")
+    {
+        throw new Error(`codec: VERIFY on write-only iterator ${iterIdx}`)
+    }
+
+    let match = true
+    for(const b of c.final())
+    {
+        match = it.pos < ctx.length && ctx.buffer[it.pos] === b && match
+        it.pos++
+    }
+
+    if(!match)
+    {
+        throw new CodecTrap(code)
     }
 }

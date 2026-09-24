@@ -208,7 +208,7 @@ describe("codec scope — §6's worked changes, run for real", () =>
         const leafRule = codecRule(pInteger(-Infinity, Infinity), (_m, _c: void, _r, s) =>
         {
             const own = s.iter()
-            return ir`write(${s.i0}, 1, load_val(${s.o0})); clone_rd(${s.i0}, ${own}); u32 x = 0; x = read(${own}, 1);`
+            return ir`clone_rd(${s.i0}, ${own}); write(${s.i0}, 1, load_val(${s.o0})); u32 x = 0; x = read(${own}, 1);`
         })
         // Both scopes handed out "1"; frame scoping keeps them apart.
         assert.deepEqual(encode([structRule, leafRule]), [99, 5])

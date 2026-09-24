@@ -20,6 +20,7 @@
  */
 
 import type { ExtInstrOf } from "mog-core"
+import type { CryptoParam } from "./crypto/crypto"
 
 export type CodecExtInstr =
     | { ext: "ENTER"; dst: number; src: number; ref: number }
@@ -39,6 +40,11 @@ export type CodecExtInstr =
     | { ext: "CALL_CODEC_NEXT"; calleeIndex: number; src: number }
     | { ext: "WRITE_SEQ"; iter: number; handle: number; width: number }
     | { ext: "READ_SEQ"; iter: number; handle: number; width: number; signed: boolean }
+    | { ext: "INIT"; crypto: number; alg: string; params: readonly CryptoParam[] }
+    | { ext: "ABSORB"; crypto: number; src: number; end: number }
+    | { ext: "FINAL"; crypto: number; iter: number }
+    | { ext: "VERIFY"; crypto: number; iter: number; code: number }
+    | { ext: "ABSORB_REST"; crypto: number; src: number }
 
 export const enterInstr = (dst: number, src: number, ref: number): ExtInstrOf<CodecExtInstr> =>
     ({ op: "EXT", ext: "ENTER", dst, src, ref })
@@ -90,3 +96,18 @@ export const writeSeqInstr = (iter: number, handle: number, width: number): ExtI
 
 export const readSeqInstr = (iter: number, handle: number, width: number, signed: number | boolean): ExtInstrOf<CodecExtInstr> =>
     ({ op: "EXT", ext: "READ_SEQ", iter, handle, width, signed: !!signed })
+
+export const initInstr = (crypto: number, alg: string, params: readonly CryptoParam[]): ExtInstrOf<CodecExtInstr> =>
+    ({ op: "EXT", ext: "INIT", crypto, alg, params })
+
+export const absorbInstr = (crypto: number, src: number, end: number): ExtInstrOf<CodecExtInstr> =>
+    ({ op: "EXT", ext: "ABSORB", crypto, src, end })
+
+export const finalInstr = (crypto: number, iter: number): ExtInstrOf<CodecExtInstr> =>
+    ({ op: "EXT", ext: "FINAL", crypto, iter })
+
+export const verifyInstr = (crypto: number, iter: number, code: number): ExtInstrOf<CodecExtInstr> =>
+    ({ op: "EXT", ext: "VERIFY", crypto, iter, code })
+
+export const absorbRestInstr = (crypto: number, src: number): ExtInstrOf<CodecExtInstr> =>
+    ({ op: "EXT", ext: "ABSORB_REST", crypto, src })

@@ -53,17 +53,25 @@
  * the same way here). `count` is never one of `ExtInstr`'s operands for
  * either op — both take it as a trailing `pRtl("acc")` DSL demand
  * (codec-extension.ts), read from `acc` at runtime, not wire-encoded.
+ *
+ * `SEEK` is one code, `iter` always LEB128'd; its four former compact codes
+ * are `CRYPTO` and three spare, reserved codes, so every later band keeps
+ * its bytes. `CRYPTO` is the crypto ops' extension point: an unsigned
+ * LEB128 sub-code (`CRYPTO_OPCODES`' index), then that op's own operands
+ * (the workspace's docs/crypto.md §2.1).
  */
 
 import type { ExtCodec, ExtInstrOf } from "mog-core"
 import { encodeLeb128, decodeLeb128 } from "mog-core"
-import { CODEC_OPCODES, assertNever } from "./opcodes"
-import type { CodecOpcode } from "./opcodes"
+import { DIRECT_OPCODES, CRYPTO_OPCODES, assertNever } from "./opcodes"
+import type { DirectOpcode, CryptoOpcode } from "./opcodes"
 import type { CodecExtInstr } from "./codec-ext-instr"
+import type { CryptoParam } from "./crypto/crypto"
 import {
     enterInstr, enterNextInstr, loadValInstr, storeValInstr, countInstr, tagInstr, openListInstr,
     readInstr, writeInstr, hasNextInstr, cloneRdInstr, cloneWrInstr, seekInstr,
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
+    initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
 } from "./codec-ext-instr"
 
 /** Handle IDs, iterator IDs, and (per this file's header) `ENTER`'s `ref`
@@ -203,19 +211,15 @@ function readWriteBand(): Band
     }
 }
 
-/** `SEEK i, Δ` — `operands = [iterIdx, delta]`. `delta` is always
- *  zigzag-LEB128'd (a genuine signed offset, not a small-cardinality
- *  index); only `iterIdx` gets the compact/extended split. */
+/** `SEEK i, Δ` — `operands = [iterIdx, delta]`, both always LEB128'd,
+ *  `delta` zigzag. */
 function seekBand(): Band
 {
     return {
-        width: SMALL + 1,
-        encode: ([iterIdx, delta]) => iterIdx! < SMALL
-            ? { code: iterIdx!, rest: encodeSigned(delta!) }
-            : { code: SMALL, rest: [...encodeLeb128(iterIdx!), ...encodeSigned(delta!)] },
-        decode: (code, bytes, pos) =>
+        width: 1,
+        encode: ([iterIdx, delta]) => ({ code: 0, rest: [...encodeLeb128(iterIdx!), ...encodeSigned(delta!)] }),
+        decode: (_code, bytes, pos) =>
         {
-            if (code < SMALL) { const d = decodeSigned(bytes, pos); return { operands: [code, d.value], next: d.next } }
             const idx = decodeLeb128(bytes, pos)
             const d = decodeSigned(bytes, idx.next)
             return { operands: [idx.value, d.value], next: d.next }
@@ -336,7 +340,7 @@ function readSeqBand(): Band
     }
 }
 
-const BAND_BY_OP: Readonly<Record<CodecOpcode, Band>> = {
+const BAND_BY_OP: Readonly<Record<DirectOpcode, Band>> = {
     ENTER: enterBand(),
     ENTER_NEXT: impliedNextBand("dst-src"),
     LOAD_VAL: smallIndexBand(),
@@ -365,12 +369,14 @@ const BAND_BY_OP: Readonly<Record<CodecOpcode, Band>> = {
  *  isa-core.md's Appendix) doesn't apply here: there is no pre-existing
  *  external byte assignment this table needs to match, only internal
  *  consistency between `encode`/`decode`. */
-const BASE_BY_OP = new Map<CodecOpcode, number>()
+const BASE_BY_OP = new Map<DirectOpcode, number>()
 let TOTAL_CODES = 0
-for (const op of CODEC_OPCODES)
+let CRYPTO_CODE = -1
+for (const op of DIRECT_OPCODES)
 {
     BASE_BY_OP.set(op, TOTAL_CODES)
     TOTAL_CODES += BAND_BY_OP[op].width
+    if (op === "SEEK") { CRYPTO_CODE = TOTAL_CODES; TOTAL_CODES += 4 }
 }
 
 // isa-core.md §5.1: the extension owns exactly the top 128 codes (bytes
@@ -380,10 +386,10 @@ for (const op of CODEC_OPCODES)
 if (TOTAL_CODES > 128)
     throw new Error(`wire: codec opcode bands need ${TOTAL_CODES} codes, only 128 are available (isa-core.md §5.1)`)
 
-function opAndLocalCodeOf(byte: number): { op: CodecOpcode; local: number }
+function opAndLocalCodeOf(byte: number): { op: DirectOpcode; local: number }
 {
     const code = byte - 128
-    for (const op of CODEC_OPCODES)
+    for (const op of DIRECT_OPCODES)
     {
         const base = BASE_BY_OP.get(op)!
         const w = BAND_BY_OP[op].width
@@ -397,7 +403,13 @@ function opAndLocalCodeOf(byte: number): { op: CodecOpcode; local: number }
  *  documents — the one place the named/positional seam lives, so every
  *  `Band` factory above stays untouched, pure bit-packing over
  *  `readonly number[]`. */
-function operandsOf(instr: CodecExtInstr): readonly number[]
+type DirectInstr = Extract<CodecExtInstr, { ext: DirectOpcode }>
+type CryptoInstr = Extract<CodecExtInstr, { ext: CryptoOpcode }>
+
+const isCrypto = (instr: CodecExtInstr): instr is CryptoInstr =>
+    (CRYPTO_OPCODES as readonly string[]).includes(instr.ext)
+
+function operandsOf(instr: DirectInstr): readonly number[]
 {
     switch(instr.ext)
     {
@@ -426,7 +438,7 @@ function operandsOf(instr: CodecExtInstr): readonly number[]
  *  the flat array a `Band.decode` just reconstructed, via the same 17
  *  named constructors `codecRules()` uses (codec-ext-instr.ts), so there's
  *  exactly one place per opcode that knows its own operand order. */
-function fromOperands(op: CodecOpcode, operands: readonly number[]): ExtInstrOf<CodecExtInstr>
+function fromOperands(op: DirectOpcode, operands: readonly number[]): ExtInstrOf<CodecExtInstr>
 {
     switch(op)
     {
@@ -451,8 +463,124 @@ function fromOperands(op: CodecOpcode, operands: readonly number[]): ExtInstrOf<
     }
 }
 
+// ── Crypto ops ───────────────────────────────────────────────────────────
+
+const utf8 = new TextEncoder()
+const fromUtf8 = new TextDecoder("utf-8", { fatal: true })
+
+function take(bytes: Uint8Array, pos: number, length: number): { value: Uint8Array; next: number }
+{
+    if (pos + length > bytes.length) throw new Error(`wire: ran off the end of the buffer at offset ${pos}`)
+    return { value: bytes.subarray(pos, pos + length), next: pos + length }
+}
+
+/** `alg`: LEB128 byte length, then UTF-8. */
+function encodeAlg(alg: string): number[]
+{
+    const b = [...utf8.encode(alg)]
+    return [...encodeLeb128(b.length), ...b]
+}
+
+function decodeAlg(bytes: Uint8Array, pos: number): { value: string; next: number }
+{
+    const len = decodeLeb128(bytes, pos)
+    const b = take(bytes, len.next, len.value)
+    return { value: fromUtf8.decode(b.value), next: b.next }
+}
+
+/** Per entry a NUL-terminated UTF-8 name, a LEB128 length and that many
+ *  value bytes; an empty name ends the list. */
+function encodeParams(params: readonly CryptoParam[]): number[]
+{
+    const out: number[] = []
+    const seen = new Set<string>()
+    for (const p of params)
+    {
+        const name = [...utf8.encode(p.name)]
+        if (name.length === 0 || name.includes(0)) throw new Error(`wire: parameter name ${JSON.stringify(p.name)} is empty or contains NUL`)
+        if (seen.has(p.name)) throw new Error(`wire: parameter "${p.name}" given twice`)
+        seen.add(p.name)
+        out.push(...name, 0, ...encodeLeb128(p.value.length), ...p.value)
+    }
+    out.push(0)
+    return out
+}
+
+function decodeParams(bytes: Uint8Array, pos: number): { value: CryptoParam[]; next: number }
+{
+    const params: CryptoParam[] = []
+    for (;;)
+    {
+        const nul = bytes.indexOf(0, pos)
+        if (nul < 0) throw new Error(`wire: unterminated parameter list at offset ${pos}`)
+        if (nul === pos) return { value: params, next: pos + 1 }
+        const name = fromUtf8.decode(bytes.subarray(pos, nul))
+        if (params.some(p => p.name === name)) throw new Error(`wire: parameter "${name}" given twice`)
+        const len = decodeLeb128(bytes, nul + 1)
+        const v = take(bytes, len.next, len.value)
+        params.push({ name, value: [...v.value] })
+        pos = v.next
+    }
+}
+
+function encodeCrypto(instr: CryptoInstr): number[]
+{
+    const head = [128 + CRYPTO_CODE, ...encodeLeb128(CRYPTO_OPCODES.indexOf(instr.ext)), ...encodeLeb128(instr.crypto)]
+    switch (instr.ext)
+    {
+        case "INIT": return [...head, ...encodeAlg(instr.alg), ...encodeParams(instr.params)]
+        case "ABSORB": return [...head, ...encodeLeb128(instr.src), ...encodeLeb128(instr.end)]
+        case "FINAL": return [...head, ...encodeLeb128(instr.iter)]
+        case "VERIFY": return [...head, ...encodeLeb128(instr.iter), ...encodeLeb128(instr.code)]
+        case "ABSORB_REST": return [...head, ...encodeLeb128(instr.src)]
+        default: return assertNever(instr)
+    }
+}
+
+function decodeCrypto(bytes: Uint8Array, pos: number): { instr: ExtInstrOf<CodecExtInstr>; next: number }
+{
+    const sub = decodeLeb128(bytes, pos)
+    const op = CRYPTO_OPCODES[sub.value]
+    // An unassigned sub-code has no known length, so nothing after it can be read.
+    if (op === undefined) throw new Error(`wire: crypto sub-code ${sub.value} is unassigned`)
+    const crypto = decodeLeb128(bytes, sub.next)
+    switch (op)
+    {
+        case "INIT":
+        {
+            const alg = decodeAlg(bytes, crypto.next)
+            const params = decodeParams(bytes, alg.next)
+            return { instr: initInstr(crypto.value, alg.value, params.value), next: params.next }
+        }
+        case "ABSORB":
+        {
+            const src = decodeLeb128(bytes, crypto.next)
+            const end = decodeLeb128(bytes, src.next)
+            return { instr: absorbInstr(crypto.value, src.value, end.value), next: end.next }
+        }
+        case "FINAL":
+        {
+            const iter = decodeLeb128(bytes, crypto.next)
+            return { instr: finalInstr(crypto.value, iter.value), next: iter.next }
+        }
+        case "VERIFY":
+        {
+            const iter = decodeLeb128(bytes, crypto.next)
+            const code = decodeLeb128(bytes, iter.next)
+            return { instr: verifyInstr(crypto.value, iter.value, code.value), next: code.next }
+        }
+        case "ABSORB_REST":
+        {
+            const src = decodeLeb128(bytes, crypto.next)
+            return { instr: absorbRestInstr(crypto.value, src.value), next: src.next }
+        }
+        default: return assertNever(op)
+    }
+}
+
 function encode(instr: CodecExtInstr): number[]
 {
+    if (isCrypto(instr)) return encodeCrypto(instr)
     const op = instr.ext
     const band = BAND_BY_OP[op]
     const base = BASE_BY_OP.get(op)!
@@ -462,6 +590,7 @@ function encode(instr: CodecExtInstr): number[]
 
 function decode(bytes: Uint8Array, offset: number): { instr: ExtInstrOf<CodecExtInstr>; next: number }
 {
+    if (bytes[offset]! - 128 === CRYPTO_CODE) return decodeCrypto(bytes, offset + 1)
     const { op, local } = opAndLocalCodeOf(bytes[offset]!)
     const { operands, next } = BAND_BY_OP[op].decode(local, bytes, offset + 1)
     return { instr: fromOperands(op, operands), next }

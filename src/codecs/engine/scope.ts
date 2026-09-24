@@ -32,6 +32,14 @@ export class IterId
     toString(): string { return String(this.id) }
 }
 
+/** An allocated crypto-handle id (the workspace's docs/crypto.md §3).
+ *  Splices as its number. */
+export class CryptoId
+{
+    constructor(readonly id: number) {}
+    toString(): string { return String(this.id) }
+}
+
 /** A slot, the type currently in it, and the `enter` that put it there. */
 export interface SlotHandle
 {
@@ -96,6 +104,7 @@ export interface CodecScope
     readonly i0: IterId
     slot(): Slot
     iter(): IterId
+    crypto(): CryptoId
 }
 
 /** A scope for a procedure whose `o0` is bound to `entry` (§4's codec
@@ -104,11 +113,13 @@ export function codecScope(entry: TypeNode): CodecScope
 {
     let slots = 0
     let iters = 0
+    let cryptos = 0
 
     return {
         o0: handleOf(new Slot(0), entry, ir``),
         i0: new IterId(0),
         slot: () => new Slot(++slots),
         iter: () => new IterId(++iters),
+        crypto: () => new CryptoId(cryptos++),
     }
 }

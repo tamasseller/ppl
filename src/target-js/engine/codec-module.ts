@@ -113,6 +113,7 @@ export interface CodecModuleOptions
 export const RUNTIME_IMPORTS = [
     "read", "write", "hasNext", "cloneRd", "cloneWr", "seek", "pushForks", "popForks", "writeSeq", "readSeq", "readSeqView", "writeSeqRaw",
     "tagOf", "signExtend", "revBits", "CodecTrap", "inDomain", "saturate", "orReplace",
+    "cryptoSpec", "cryptoAbsorb", "cryptoAbsorbRest", "cryptoFinal", "cryptoVerify",
 ] as const
 
 /**
@@ -152,7 +153,7 @@ export function generateCodecModule(opts: CodecModuleOptions): string
     const valueType = typeResult.get(graph.root.id)?.ref ?? "unknown"
 
     return `import { ${RUNTIME_IMPORTS.join(", ")} } from "ppl"
-import type { Ctx } from "ppl"
+import type { Ctx, CryptoContext } from "ppl"
 
 ${emitTSDeclarations(typeResult)}
 ${generateProcedures(encodeProgram, encodeEntryTypes, "encode", typeResult, paths)}
