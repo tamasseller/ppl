@@ -29,6 +29,9 @@ export interface IntegerType
     /** Substituted when this slot exists on one side only
      *  (docs/reconciliation.md §2.4). Absent: the slot is required. */
     default?: number
+    /** Namespaced, e.g. `si:voltage`. Compatibility is equality where both
+     *  sides declare one (docs/reconciliation.md §2.1). */
+    meaning?: string
 }
 
 export interface ListType
@@ -82,13 +85,19 @@ export const isReference = (t: SemanticType): t is UnionType => kindOf(t) === "r
 export interface IntegerOptions
 {
     readonly default?: number
+    readonly meaning?: string
 }
 
 export const integer = (min: number, max: number, opts: IntegerOptions = {}): IntegerType =>
 {
     if(opts.default !== undefined && (opts.default < min || max < opts.default))
         throw new Error(`integer: default ${opts.default} is outside ${min}..${max}`)
-    return {kind: SemanticTypeKinds.Integer, min, max, default: opts.default}
+    if(opts.meaning !== undefined && !/^[^\s:]+:\S+$/.test(opts.meaning))
+        throw new Error(`integer: meaning "${opts.meaning}" is not namespaced, e.g. "si:voltage"`)
+    return {
+        kind: SemanticTypeKinds.Integer, min, max, default: opts.default,
+        ...(opts.meaning !== undefined && {meaning: opts.meaning}),
+    }
 }
 
 // `2 ** n`, not `1 << n`: JS's `<<` operates on signed 32-bit ints (shift
@@ -194,22 +203,24 @@ export const named = <T extends object>(name: string, obj: T): T =>
 /** Read back a type's declared name, if any. */
 export const nameOf = (t: SemanticType): string | undefined => (t as {[NAME]?: string})[NAME]
 
-export function defaultValueOf(t: SemanticType): unknown
+export function defaultValueOf(t: SemanticType, path?: string): unknown
 {
+    const at = path === undefined ? "" : ` at ${path}`
     const c = derefType(t)
     switch(c.kind)
     {
         case SemanticTypeKinds.Unit:    return undefined
         case SemanticTypeKinds.Integer:
             if(c.default === undefined)
-                throw new Error("defaultValueOf: integer has no declared default")
+                throw new Error(`defaultValueOf: integer${at} has no declared default`)
             return c.default
         case SemanticTypeKinds.List:    return []
         case SemanticTypeKinds.Struct:
-            return Object.fromEntries([...c.fields.entries()].map(([name, type]) => [name, defaultValueOf(type)]))
+            return Object.fromEntries([...c.fields.entries()].map(([name, type]) =>
+                [name, defaultValueOf(type, path === undefined ? undefined : `${path}.${name}`)]))
         case SemanticTypeKinds.Union:
             if(c.defaultVariant === undefined)
-                throw new Error("defaultValueOf: union has no declared defaultVariant")
+                throw new Error(`defaultValueOf: union${at} has no declared defaultVariant`)
             return {variant: c.defaultVariant, value: undefined}
     }
 }

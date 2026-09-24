@@ -176,6 +176,48 @@ describe("reconcile(): cycle safety", () =>
     })
 })
 
+describe("reconcile(): a mismatch names its position", () =>
+{
+    test("kind mismatch through a list and a union variant", () =>
+    {
+        const image = named("Packet", struct({ readings: list(union({ temp: struct({ v: u8 }), off: unit })) }))
+        const local = named("Packet", struct({ readings: list(union({ temp: struct({ v: struct({}) }), off: unit })) }))
+        assert.throws(() => reconcile(root(image), root(local)),
+            { message: 'reconcile: kind mismatch at Packet.readings[].temp.v — image is "integer", local is "struct"' })
+    })
+
+    test("meaning mismatch; an unnamed root reads as root", () =>
+    {
+        const image = struct({ v: integer(0, 4095, { meaning: "si:voltage" }) })
+        const local = struct({ v: integer(0, 4095, { meaning: "si:power" }) })
+        assert.throws(() => reconcile(root(image), root(local)),
+            { message: 'reconcile: meaning mismatch at root.v — image is "si:voltage", local is "si:power"' })
+    })
+})
+
+describe("reconcile(): meaning (§4.3)", () =>
+{
+    const volts = integer(0, 4095, { meaning: "si:voltage" })
+    const watts = integer(0, 4095, { meaning: "si:power" })
+
+    test("different meanings are rejected", () =>
+    {
+        assert.throws(() => reconcile(root(struct({ v: volts })), root(struct({ v: watts }))), /meaning mismatch/)
+    })
+
+    test("equal meanings match", () =>
+    {
+        const c = reconcile(root(struct({ v: volts })), root(struct({ v: integer(0, 4095, { meaning: "si:voltage" }) })))
+        assert.equal(edgeOf(c, "v").correspondence.outcome, "matched")
+    })
+
+    test("a meaning on one side only is compatible, either side", () =>
+    {
+        assert.equal(edgeOf(reconcile(root(struct({ v: volts })), root(struct({ v: u16 }))), "v").correspondence.outcome, "matched")
+        assert.equal(edgeOf(reconcile(root(struct({ v: u16 })), root(struct({ v: volts }))), "v").correspondence.outcome, "matched")
+    })
+})
+
 describe("resolve(): struct field — all four cells are real (§4.4 table)", () =>
 {
     test("image-only field, decode → drop (§4.4)", () =>
@@ -208,6 +250,13 @@ describe("resolve(): struct field — all four cells are real (§4.4 table)", ()
         assert.throws(() => resolve(imageOnly, edgeOf(imageOnly, "extra"), "encode"), /no declared default/)
         const localOnly = reconcile(root(struct({})), root(struct({ extra: u8 })))
         assert.throws(() => resolve(localOnly, edgeOf(localOnly, "extra"), "decode"), /no declared default/)
+    })
+
+    test("a missing default names its position, below the edge that needs it", () =>
+    {
+        const c = reconcile(root(named("Packet", struct({ extra: struct({ a: integer(0, 255, { default: 1 }), b: u8 }) }))), root(struct({})))
+        assert.throws(() => resolve(c, edgeOf(c, "extra"), "encode"),
+            { message: "defaultValueOf: integer at Packet.extra.b has no declared default" })
     })
 
     test("matched field → bridge, both directions", () =>

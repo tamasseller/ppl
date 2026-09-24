@@ -125,7 +125,8 @@ per-node recurrence to exploit here, so a byte per tag is already at floor.
 | `0xCE` | `UNION_EXT` | variantCount: LEB128, name specification, defaultIndex |
 | `0xCF` | `PUSH_REF_EXT` | delta: LEB128 |
 | `0xD0` | `END` | none; pop the one remaining value (which must be the only one left) as the root type, section over |
-| `0xD1`-`0xFF` | reserved | |
+| `0xD1` | `MEANING` | string-table index: LEB128; pops an integer, pushes it with that `meaning` |
+| `0xD2`-`0xFF` | reserved | |
 
 Four integer forms rather than one general form: no default is the common
 case (reconciliation.md §2.4: only a field added after its peers declares
@@ -136,6 +137,11 @@ tag rather than paying for operands the common cases don't need, the same
 move `wire.ts` makes for the codec opcodes. A canonical range with a
 default takes a `DEF` form, never a canonical tag.
 
+`meaning` (reconciliation.md §2.1) is a postfix `MEANING` after whichever
+integer form fits, rather than a flag doubling the four forms: most integers
+carry none. `MEANING` is a construction of its own (§3.4), so the plain
+integer beneath it stays reachable by `PUSH_REF` too.
+
 Encode is a bare postorder walk, no bookkeeping beyond §3.4's:
 
 ```
@@ -143,7 +149,8 @@ encode(node):
     switch(node.type.kind)
         unit:    emit PUSH_UNIT
         integer: emit canonical PUSH_* if no default, else whichever
-                 PUSH_INT_*EXT fits (min=0? default? both? neither?)
+                 PUSH_INT_*EXT fits (min=0? default? both? neither?);
+                 then MEANING(idx) if it has a meaning
         list:    encode(elementType); emit LIST or LIST_EXT(capacity)
         struct:  for each field:   encode(child)
                  emit STRUCT(N, nameSpec) or, if N ≥ 64,
@@ -156,7 +163,7 @@ encode(root); emit END
 
 ### 3.3 String table
 
-Field and variant names never appear inline. They live in a table preceding
+Field and variant names, and `meaning` strings, never appear inline. They live in a table preceding
 the instruction stream: `count: LEB128`, then `count` length-prefixed UTF-8
 entries, deduplicated at encode time via a `Map<string, index>` built while
 walking, in first-appearance order.
@@ -227,7 +234,7 @@ one; `PUSH_REF`/`PUSH_REF_EXT` look up `table[nextIndex - delta]` and push a
 copy without adding a new entry.
 
 Discovery keys on a structural *signature*, a pure function of shape (kind,
-range, field/variant names, recursively) computed before deciding whether to
+range, default, meaning, field/variant names, recursively) computed before deciding whether to
 recurse into children. Keying on the emitted bytes instead never matches a
 repeated composite's second occurrence: its children resolve to short
 backrefs the first occurrence's construction bytes lack, so two occurrences

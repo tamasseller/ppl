@@ -50,8 +50,8 @@
  */
 
 import type { TypeNode } from "./type-graph"
-import { SemanticTypeKinds, defaultValueOf } from "./metamodel"
-import type { UnionType } from "./metamodel"
+import { SemanticTypeKinds, defaultValueOf, nameOf } from "./metamodel"
+import type { IntegerType, SemanticType, UnionType } from "./metamodel"
 
 /** Which of the two ends of a codec a piece of generated/interpreted code
  *  is playing — encoding a local value onto the wire, or decoding wire
@@ -76,6 +76,9 @@ export interface Correspondence
     readonly outcome: ReconciliationOutcome
     readonly imageNode?: TypeNode
     readonly localNode?: TypeNode
+    /** For error messages only: one position this pair occurs at. A shared
+     *  pair is the same pair at every position, so any one names the defect. */
+    readonly path: string
     /** Struct fields *or* union variants (never both — which one applies
      *  is determined by this node's own kind, whichever side has it),
      *  keyed by name. The *union* of names present on either side: image
@@ -159,7 +162,8 @@ export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Corresponde
 {
     const cache = new Map<string, Correspondence>()
 
-    function pair(imageNode: TypeNode | undefined, localNode: TypeNode | undefined): Correspondence
+    // `path` names the first position reaching this pair; a memoized revisit reports nothing.
+    function pair(imageNode: TypeNode | undefined, localNode: TypeNode | undefined, path: string): Correspondence
     {
         const key = `${imageNode?.id ?? "-"}|${localNode?.id ?? "-"}`
         const cached = cache.get(key)
@@ -168,30 +172,40 @@ export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Corresponde
         if(imageNode && localNode && imageNode.type.kind !== localNode.type.kind)
         {
             throw new Error(
-                `reconcile: kind mismatch — image is "${imageNode.type.kind}", local is "${localNode.type.kind}" ` +
-                `(docs/reconciliation.md §4.3: kind-changing evolution is out of scope)`)
+                `reconcile: kind mismatch at ${path} — image is "${imageNode.type.kind}", local is "${localNode.type.kind}"`)
+        }
+
+        if(imageNode && localNode && imageNode.type.kind === SemanticTypeKinds.Integer)
+        {
+            const imageMeaning = (imageNode.type as IntegerType).meaning
+            const localMeaning = (localNode.type as IntegerType).meaning
+            if(imageMeaning !== undefined && localMeaning !== undefined && imageMeaning !== localMeaning)
+            {
+                throw new Error(
+                    `reconcile: meaning mismatch at ${path} — image is "${imageMeaning}", local is "${localMeaning}"`)
+            }
         }
 
         const outcome = outcomeOf(imageNode, localNode)
         const kind = (imageNode ?? localNode)!.type.kind
-        const c: Correspondence = { outcome, imageNode, localNode }
+        const c: Correspondence = { outcome, imageNode, localNode, path }
         cache.set(key, c) // reserved — before recursing, so a cycle hits this entry
 
         if(kind === SemanticTypeKinds.Struct)
         {
             const names = unionOfNames(fieldNamesOf(imageNode), fieldNamesOf(localNode))
-            const children = names.map(n => ({ name: n, correspondence: pair(fieldEdge(imageNode, n), fieldEdge(localNode, n)) }))
+            const children = names.map(n => ({ name: n, correspondence: pair(fieldEdge(imageNode, n), fieldEdge(localNode, n), `${path}.${n}`) }))
             ;(c as { children?: readonly CorrespondenceEdge[] }).children = children
         }
         else if(kind === SemanticTypeKinds.Union)
         {
             const names = unionOfNames(variantNamesOf(imageNode), variantNamesOf(localNode))
-            const children = names.map(n => ({ name: n, correspondence: pair(variantEdge(imageNode, n), variantEdge(localNode, n)) }))
+            const children = names.map(n => ({ name: n, correspondence: pair(variantEdge(imageNode, n), variantEdge(localNode, n), `${path}.${n}`) }))
             ;(c as { children?: readonly CorrespondenceEdge[] }).children = children
         }
         else if(kind === SemanticTypeKinds.List)
         {
-            const element = pair(elementEdge(imageNode), elementEdge(localNode))
+            const element = pair(elementEdge(imageNode), elementEdge(localNode), `${path}[]`)
             ;(c as { element?: Correspondence }).element = element
         }
         // Unit/Integer: leaves, nothing to recurse into.
@@ -199,7 +213,7 @@ export function reconcile(imageRoot: TypeNode, localRoot: TypeNode): Corresponde
         return c
     }
 
-    return pair(imageRoot, localRoot)
+    return pair(imageRoot, localRoot, nameOf(imageRoot.source as SemanticType) ?? nameOf(localRoot.source as SemanticType) ?? "root")
 }
 
 export type Resolution =
@@ -258,7 +272,7 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
                     reason: `variant "${edge.name}" isn't recognized locally and the local union declares no default variant`,
                 }
             }
-            return { action: "default", value: defaultValueOf(parent.localNode!.type) }
+            return { action: "default", value: defaultValueOf(parent.localNode!.type, parent.path) }
         }
 
         // local-only. §4.5 — encode: the local value genuinely is this
@@ -279,11 +293,11 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
         // safe. §4.4 (encode): substitute the field's own declared default,
         // read from the image — the only place a value for a field the
         // local model doesn't have at all could come from.
-        return direction === "decode" ? { action: "drop" } : { action: "default", value: defaultValueOf(c.imageNode!.type) }
+        return direction === "decode" ? { action: "drop" } : { action: "default", value: defaultValueOf(c.imageNode!.type, c.path) }
     }
 
     // local-only. §4.4 (decode): the decoder itself instantiates this
     // field's container; seed it from the local declared default. §4.4
     // (encode, additive): drop — unconditionally safe, the mirror of image-only/decode.
-    return direction === "decode" ? { action: "default", value: defaultValueOf(c.localNode!.type) } : { action: "drop" }
+    return direction === "decode" ? { action: "default", value: defaultValueOf(c.localNode!.type, c.path) } : { action: "drop" }
 }

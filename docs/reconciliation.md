@@ -1,8 +1,8 @@
 # Reconciliation
 
 > **Status:** partly implemented.
-> - Implemented: options-object constructors (§2.2), optional domain-checked defaults (§2.4), name matching (§4.1), `reconcile` and `resolve` (§4.2), kind mismatch (§4.3), struct fields (§4.4), union variants (§4.5) with `defaultVariant` covering both causes. `src/core/reconcile.ts`, `src/target-js/engine/bridging-codec-module.ts`.
-> - Not implemented: `classify` (§4.2), validation seams (§5.2), integer domains (§4.6), list length domains (§4.7), policies (§2.5), `meaning` and transforms (§2.1–§2.3), text (§2.6), their image encoding (§3.1).
+> - Implemented: options-object constructors (§2.2), optional domain-checked defaults (§2.4), `meaning` (§2.1), name matching (§4.1), `reconcile` and `resolve` (§4.2), kind mismatch (§4.3), struct fields (§4.4), union variants (§4.5) with `defaultVariant` covering both causes. `src/core/reconcile.ts`, `src/target-js/engine/bridging-codec-module.ts`.
+> - Not implemented: `classify` (§4.2), validation seams (§5.2), integer domains (§4.6), list length domains (§4.7), policies (§2.5), transforms (§2.3), text (§2.6), their image encoding (§3.1).
 > - Today a matched integer or list always bridges unchecked. Staging is §7.
 
 Builds on codec-extension.md (`TypeNode`, `Step`, `ref` addressing) and
@@ -36,7 +36,8 @@ What must be agreed between parties, and the only thing reconciled for equality.
 
 - Kind (`SemanticTypeKinds`).
 - Struct field and union variant names.
-- `meaning` on an integer leaf: a namespaced string, e.g. `si:voltage`, `time:utc-instant`, `text:codepoint`. Compatibility is string equality. Absent on both sides means "identity numbering" (today's behavior).
+- `meaning` on an integer leaf: a namespaced string, e.g. `si:voltage`, `time:utc-instant`, `text:codepoint`. Compatibility is string equality where both sides declare one.
+- A `meaning` on one side only is compatible: adding one to a leaf must not break every deployed peer that lacks it.
 
 `meaning` must be specific enough to separate what shares a dimension:
 torque and energy are both N·m; ratio, percent, dB and radian are all
@@ -167,11 +168,11 @@ A string is `list(integer)`; the element's `meaning` is `text:codepoint`, canoni
 
 ### 3.1 Codec image
 
-- Carries the origin's semantic tree with its projection: kinds, names, `min`/`max`/`default`, `minLength`/`maxLength`, `defaultVariant`, and (proposed) `meaning` and `toCanonical`.
+- Carries the origin's semantic tree with its projection: kinds, names, `min`/`max`/`default`, `minLength`/`maxLength`, `defaultVariant`, `meaning`, and (proposed) `toCanonical`.
 - Carries no policies. They are the consumer's.
 - Encoder and decoder programs as the origin compiled them; reconciliation never rewrites them.
-- Proposed encoding, in codec-image.md §3.2's integer push instructions, folded into the tag the way `min = 0` and `default = 0` fold:
-  - `meaning`: an index into codec-image.md §3.3's string table.
+- `meaning` is codec-image.md §3.2's `MEANING` postfix, naming a string-table entry.
+- Proposed encoding for the rest:
   - Transform: a tag byte and operands. Rational is zigzag-LEB128 numerator, LEB128 denominator.
   - `table`s are interned in a table of their own, indexed like strings. A code page is 256 points and shared by construction.
   - `LIST_EXT` carries both length bounds, with folds for `minLength = 0` and for a fixed length.
@@ -206,12 +207,13 @@ export function resolve(parent: Correspondence, edge: CorrespondenceEdge, direct
 ```
 
 - `reconcile` is the direction-agnostic lock-step walk. Each node is `matched`, `image-only` or `local-only`.
+- `reconcile` throws on a kind or `meaning` mismatch: both are the same in either direction.
 - Memoized on the `(imageNode, localNode)` pair, reserved before recursing, so a cycle or shared type returns the same `Correspondence`. Names live on edges, never on nodes, for the same reason as `TypeEdge`.
 - `resolve` is direction-aware and per edge. Its parent must be `matched`: a non-bridged edge's resolution covers everything inside it.
 - Proposed: a third function classifies a matched leaf for one direction (§4.3):
 
 ```ts
-export function classify(c: Correspondence, direction: Direction): Resolution  // throws on empty
+export function classify(c: Correspondence, direction: Direction): Resolution  // throws on an empty domain
 ```
 
 - It needs no parent, so any slot can call it: an integer at `STORE_VAL`/`LOAD_VAL`, a list element reached by `CALL_CODEC_NEXT` (which never goes through `resolve`), a list's length at open/close.
@@ -225,7 +227,7 @@ Every edge, for one direction, falls in exactly one class. Decided at build time
 |---|---|---|
 | total | `g(D_src) ⊆ D_dst` and `g` exact on `D_src` | conversion only; nothing for identity |
 | partial | `g(D_src) ⊄ D_dst` and `g(D_src) ∩ D_dst ≠ ∅`, or `g` is inexact | conversion, check, policy (§2.5) |
-| empty | kind differs, `meaning` differs, or `g(D_src) ∩ D_dst = ∅` | build error |
+| empty | kind or `meaning` differs (`reconcile`), or `g(D_src) ∩ D_dst = ∅` (`classify`) | build error |
 | absent | the slot exists on one side only | default from the slot's owner, or drop (§4.4) |
 
 - Kind change is empty: kind-changing evolution is out of scope.
@@ -264,10 +266,9 @@ A variant set is a domain. A variant missing on the destination side is an out-o
 ### 4.6 Integers
 
 For a matched integer leaf and a direction:
-1. `meaning` differs → empty.
-2. `g = f_dst⁻¹ ∘ f_src`, normalized (§2.3).
-3. `g(D_src)` against `D_dst` → total, partial or empty.
-4. `g` inexact on `D_src` → partial, `onInexact` applies.
+1. `g = f_dst⁻¹ ∘ f_src`, normalized (§2.3). `meaning` already matches: `reconcile` rejected a mismatch.
+2. `g(D_src)` against `D_dst` → total, partial or empty.
+3. `g` inexact on `D_src` → partial, `onInexact` applies.
 
 - The wire width is always the image's; the local domain bounds only local storage.
 - Encode: `D_src` is the local domain, so a local range wider than the image's is partial and needs `onOutOfDomain`.
@@ -361,14 +362,14 @@ Each stage carries its own image encoding change, and its tests: classification 
 1. Done: §4.1, §4.2's `reconcile` and `resolve`, §4.4, §4.5 via `defaultVariant`, §2.4.
 2. Done: options-object constructors (§2.2).
 3. Done: optional, domain-checked `default` (§2.4); codec-image.md §3.2's integer forms fold "no default".
-4. Domains and policies, as one step:
+4. Done: `meaning` (§2.1), its mismatch check in `reconcile` (§4.2), and its encoding. Catches different quantities; the same quantity in two numberings still bridges unchecked until stage 6.
+5. Domains and policies, as one step:
    - `classify` (§4.2) and §4.8's `Resolution`.
-   - Integer domains with identity numbering (§4.6 without `meaning`), `onOutOfDomain`.
+   - Integer domains with identity numbering (§4.6), `onOutOfDomain`.
    - List length domains (§4.7) replacing `capacity`: `onLength`, `LIST_EXT`'s two bounds, the matcher's `pList` containment on both.
    - `onUnknownVariant` split from `defaultVariant` (§4.5).
    - Validation seams (§5.2) in both the origin's generator (`generateCodecModule`) and the bridging one.
    - Closes today's unchecked range bridge.
-5. `meaning`, its empty check and its encoding.
 6. `affine` transforms, `onInexact`, and their encoding. Covers every epoch and geodetic scale in Appendix A.
 7. `table`, its interning, and text (§2.6).
 8. Target consumption: branded numbers in `target-js`, a strong type or folded multiply in C++.

@@ -11,7 +11,7 @@
 import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
-import type { SemanticType } from "../../src/core/index"
+import type { IntegerType, SemanticType, StructType } from "../../src/core/index"
 import {
     SemanticTypeKinds, derefType, i16, i32, i8, integer, list, struct, u16, u32, u8, union, unit,
 } from "../../src/core/index"
@@ -28,7 +28,7 @@ function sameShape(a: SemanticType, b: SemanticType): void
         case SemanticTypeKinds.Integer:
         {
             const bi = tb as typeof ta
-            assert.deepEqual({ min: ta.min, max: ta.max, default: ta.default }, { min: bi.min, max: bi.max, default: bi.default })
+            assert.deepEqual({ min: ta.min, max: ta.max, default: ta.default, meaning: ta.meaning }, { min: bi.min, max: bi.max, default: bi.default, meaning: bi.meaning })
             break
         }
         case SemanticTypeKinds.List:
@@ -107,6 +107,35 @@ describe("type tree wire — leaves", () =>
     {
         const { bytes } = roundTrip(integer(-40, 125, {default: 20}))
         assert.deepEqual([...bytes], [0, 0xCA, 79, ...[0xFA, 0x01], 40, 0xD0])
+    })
+
+    test("a meaning is a MEANING postfix on the integer, naming a string-table entry", () =>
+    {
+        const { bytes } = roundTrip(integer(0, 255, {meaning: "si:voltage"}))
+        const utf8 = [...new TextEncoder().encode("si:voltage")]
+        assert.deepEqual([...bytes], [1, utf8.length, ...utf8, 0xC1, 0xD1, 0, 0xD0])
+    })
+
+    test("MEANING is its own construction: dedup keeps the plain and the meaningful integer apart", () =>
+    {
+        const V = integer(0, 255, {meaning: "si:voltage"})
+        const { bytes, decoded } = roundTrip(struct({ a: V, b: integer(0, 255, {meaning: "si:voltage"}), c: u8 }))
+        const s = derefType(decoded) as StructType
+        assert.equal((derefType(s.fields.get("b")!) as IntegerType).meaning, "si:voltage")
+        assert.equal((derefType(s.fields.get("c")!) as IntegerType).meaning, undefined)
+        // b refers back 1 construction (the MEANING), c refers back 2 (the plain u8 under it)
+        const i = [...bytes].indexOf(0xD1)
+        assert.deepEqual([...bytes].slice(i, i + 4), [0xD1, 0, 0x80, 0x81])
+    })
+
+    test("two meanings over one range are not merged", () =>
+    {
+        roundTrip(struct({ a: integer(0, 255, {meaning: "si:voltage"}), b: integer(0, 255, {meaning: "si:power"}) }))
+    })
+
+    test("MEANING on anything but an integer is rejected", () =>
+    {
+        assert.throws(() => decodeTypeTree(Uint8Array.from([1, 4, ...new TextEncoder().encode("a:bc"), 0xC0, 0xD1, 0, 0xD0])), /MEANING applied to a unit/)
     })
 
     test("negative min/max/default round-trip correctly (zigzag sign)", () =>

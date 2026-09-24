@@ -63,6 +63,7 @@ const STRUCT_EXT = 0xCD
 const UNION_EXT = 0xCE
 const PUSH_REF_EXT = 0xCF
 const END = 0xD0
+const MEANING = 0xD1
 
 /** Every canonical width `metamodel.ts` exports — none declares a default. */
 const CANONICAL: ReadonlyArray<readonly [number, IntegerType]> = [
@@ -190,7 +191,7 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
         switch(t.kind)
         {
             case SemanticTypeKinds.Unit: return "u"
-            case SemanticTypeKinds.Integer: return `i:${t.min}:${t.max}:${t.default ?? "-"}`
+            case SemanticTypeKinds.Integer: return `i:${t.min}:${t.max}:${t.default ?? "-"}:${t.meaning ?? "-"}`
             case SemanticTypeKinds.List: return `l:${t.capacity ?? "-"}:${signatureOf(t.elementType)}`
             case SemanticTypeKinds.Struct:
                 return `s:${[...t.fields.entries()].map(([k, v]) => `${k}=${signatureOf(v)}`).join(",")}`
@@ -214,7 +215,17 @@ export function encodeTypeTree(root: SemanticType): Uint8Array
         switch(t.kind)
         {
             case SemanticTypeKinds.Unit: instructions.push(PUSH_UNIT); break
-            case SemanticTypeKinds.Integer: instructions.push(...encodeInteger(t)); break
+            case SemanticTypeKinds.Integer:
+            {
+                if(t.meaning === undefined)
+                {
+                    instructions.push(...encodeInteger(t))
+                    break
+                }
+                encodeNode(integer(t.min, t.max, {default: t.default}))
+                instructions.push(MEANING, ...encodeLeb128(nameIndex(t.meaning)))
+                break
+            }
             case SemanticTypeKinds.List:
             {
                 encodeNode(t.elementType)
@@ -396,6 +407,14 @@ export function decodeTypeTree(bytes: Uint8Array, offset: number = 0): { type: S
             {
                 const deltaR = decodeLeb128(bytes, pos); pos = deltaR.next
                 stack.push(constructions[constructions.length - deltaR.value]!)
+                break
+            }
+            case MEANING:
+            {
+                const idxR = decodeLeb128(bytes, pos); pos = idxR.next
+                const base = derefType(stack.pop()!)
+                if(base.kind !== SemanticTypeKinds.Integer) throw new Error(`decodeTypeTree: MEANING applied to a ${base.kind}`)
+                push(integer(base.min, base.max, {default: base.default, meaning: names[idxR.value]!}))
                 break
             }
             case END:

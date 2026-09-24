@@ -85,6 +85,16 @@ describe("bridging: struct, image-only field (§4.4)", () =>
     })
 })
 
+describe("bridging: a meaning mismatch fails codegen (§4.3)", () =>
+{
+    test("image si:voltage against local si:power", () =>
+    {
+        const Image = named("Reading", struct({ v: integer(0, 4095, { meaning: "si:voltage" }) }))
+        const Local = named("Reading", struct({ v: integer(0, 4095, { meaning: "si:power" }) }))
+        assert.throws(() => generateBridgingCodecModule({ name: "Reading", image: imageOf(Image), localType: Local }), /meaning mismatch/)
+    })
+})
+
 describe("bridging: a field with no default is required (§2.4)", () =>
 {
     test("an image-only field with no default fails codegen, not a message", () =>
@@ -99,6 +109,13 @@ describe("bridging: a field with no default is required (§2.4)", () =>
         const Image = named("Widget", struct({ a: u8 }))
         const Local = named("Widget", struct({ a: u8, extra: u8 }))
         assert.throws(() => generateBridgingCodecModule({ name: "Widget", image: imageOf(Image), localType: Local }), /no declared default|declares none/)
+    })
+
+    test("the error names the position, below the field that needs it", () =>
+    {
+        const Image = named("Widget", struct({ a: u8 }))
+        const Local = named("Widget", struct({ a: u8, extra: struct({ x: integer(0, 255, { default: 1 }), y: u8 }) }))
+        assert.throws(() => generateBridgingCodecModule({ name: "Widget", image: imageOf(Image), localType: Local }), /default value needed at Widget\.extra\.y /)
     })
 })
 

@@ -29,6 +29,17 @@ test("integer: a default outside min..max throws", () => {
     assert.equal(integer(10, 20, {default: 20}).default, 20)
 })
 
+test("integer: meaning is kept when given and absent otherwise", () => {
+    assert.equal(integer(0, 4095, {meaning: "si:voltage"}).meaning, "si:voltage")
+    assert.equal("meaning" in integer(0, 4095), false)
+})
+
+test("integer: a meaning must be namespaced", () => {
+    assert.throws(() => integer(0, 4095, {meaning: "voltage"}))
+    assert.throws(() => integer(0, 4095, {meaning: "si:"}))
+    assert.throws(() => integer(0, 4095, {meaning: "si:volt age"}))
+})
+
 test("integer: shared range constants (u8/i8) declare no default", () => {
     assert.equal(u8.default, undefined)
     assert.equal(i8.default, undefined)

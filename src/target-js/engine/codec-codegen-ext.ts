@@ -172,7 +172,7 @@ function scratchAccessorFor(kind: SemanticTypeKinds): Accessor
  * (already shared with `emitCallCodec`'s own flushing, for the same
  * "unique name, not a per-slot key" reason), and returns the temp's name.
  */
-function emitDefaultValue(node: TypeNode, accessorOf: (n: TypeNode) => Accessor, g: GenCtx, b: LineBuilder): string
+function emitDefaultValue(node: TypeNode, path: string, accessorOf: (n: TypeNode) => Accessor, g: GenCtx, b: LineBuilder): string
 {
     const access = accessorOf(node)
     switch(access.kind)
@@ -183,7 +183,7 @@ function emitDefaultValue(node: TypeNode, accessorOf: (n: TypeNode) => Accessor,
         {
             const intType = node.type as {min: number; max: number; default?: number}
             if(intType.default === undefined)
-                throw new Error(`codec-codegen: default value needed for ${describeType(node)}, but it declares none`)
+                throw new Error(`codec-codegen: default value needed at ${path} (${describeType(node)}), but it declares none`)
             return access.fromWire(String(intType.default), intWireSize(intType), intType.min < 0)
         }
 
@@ -191,7 +191,7 @@ function emitDefaultValue(node: TypeNode, accessorOf: (n: TypeNode) => Accessor,
         {
             const unionType = node.type as {defaultVariant?: string}
             if(unionType.defaultVariant === undefined)
-                throw new Error(`codec-codegen: default value needed for ${describeType(node)}, but it declares no defaultVariant`)
+                throw new Error(`codec-codegen: default value needed at ${path} (${describeType(node)}), but it declares no defaultVariant`)
             return access.finishUnion(unionType.defaultVariant, undefined)
         }
 
@@ -210,7 +210,7 @@ function emitDefaultValue(node: TypeNode, accessorOf: (n: TypeNode) => Accessor,
             for(const edge of node.edges)
             {
                 const name = (edge.step as {field: string}).field
-                const v = emitDefaultValue(edge.target, accessorOf, g, b)
+                const v = emitDefaultValue(edge.target, `${path}.${name}`, accessorOf, g, b)
                 b.line(`${access.setField?.(temp, name, v) ?? `${temp}.${name} = ${v}`};`)
             }
             return access.finishStruct(temp)
@@ -232,7 +232,7 @@ export function injectLocalOnlyDefaults(structCorr: Correspondence, accExpr: str
     for(const edge of structCorr.children ?? [])
     {
         if(edge.correspondence.outcome !== "local-only") continue
-        const v = emitDefaultValue(edge.correspondence.localNode!, n => accessorFor(n, g), g, b)
+        const v = emitDefaultValue(edge.correspondence.localNode!, edge.correspondence.path, n => accessorFor(n, g), g, b)
         b.line(`${access.setField?.(accExpr, edge.name, v) ?? `${accExpr}.${edge.name} = ${v}`};`)
     }
 }
@@ -458,7 +458,7 @@ function emitEnter(dst: number, src: number, ref: number, g: GenCtx, b: LineBuil
     if(resolution?.action === "default")
     {
         g.writeBacks.set(dst, {into: "field", parentSlot: src, name})
-        const defaultExpr = emitDefaultValue(childEdge!.correspondence.imageNode!, n => scratchAccessorFor(concreteKindOf(n.type)), g, b)
+        const defaultExpr = emitDefaultValue(childEdge!.correspondence.imageNode!, childEdge!.correspondence.path, n => scratchAccessorFor(concreteKindOf(n.type)), g, b)
         emitWriteBack(dst, defaultExpr, g, b)
         return
     }
@@ -655,7 +655,7 @@ function emitCallCodec(calleeIndex: number, src: number, ref: number | undefined
             // own declared default, read from the image (the only place
             // a value for a field the local model doesn't have at all
             // could come from), instead of ever reading local storage.
-            argExpr = emitDefaultValue(childCorr!.imageNode!, n => scratchAccessorFor(concreteKindOf(n.type)), g, b)
+            argExpr = emitDefaultValue(childCorr!.imageNode!, childCorr!.path, n => scratchAccessorFor(concreteKindOf(n.type)), g, b)
         }
         else if(srcKind === SemanticTypeKinds.Union)
         {
