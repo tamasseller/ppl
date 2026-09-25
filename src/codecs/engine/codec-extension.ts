@@ -33,8 +33,8 @@ import {
     callCodecInstr, callCodecNextInstr, writeSeqInstr, readSeqInstr,
     initInstr, absorbInstr, finalInstr, verifyInstr, absorbRestInstr,
 } from "./codec-ext-instr"
-import type { CryptoContext, CryptoParam } from "./crypto/crypto"
-import { createCryptoContext, integerParamBytes } from "./crypto/crypto"
+import type { CryptoContext, CryptoParam, KeyTable } from "./crypto/crypto"
+import { createCryptoContext, integerParamBytes, stringParamBytes, SLOT_ROLES } from "./crypto/crypto"
 
 export type { Direction }
 
@@ -231,8 +231,10 @@ function cryptoParams(alg: string, tail: readonly (LiteralMatch | StringMatch | 
         const name = tail[i]!, value = tail[i + 1]!
         if(name.kind !== "String") throw new Error(`crypto_init("${alg}"): parameter ${i / 2} has no string name`)
         if(params.some(p => p.name === name.value)) throw new Error(`crypto_init("${alg}"): parameter "${name.value}" given twice`)
-        if(value.kind === "String") throw new Error(`crypto_init("${alg}"): parameter "${name.value}" is a string; values are integers or byte strings`)
-        params.push({ name: name.value, value: value.kind === "Literal" ? integerParamBytes(value.value) : value.value })
+        const role = SLOT_ROLES.has(name.value)
+        if(role && value.kind !== "String") throw new Error(`crypto_init("${alg}"): parameter "${name.value}" names a slot; its value is a string`)
+        if(!role && value.kind === "String") throw new Error(`crypto_init("${alg}"): parameter "${name.value}" is a string; only a slot role (${[...SLOT_ROLES].join(", ")}) takes one`)
+        params.push({ name: name.value, value: value.kind === "Literal" ? integerParamBytes(value.value) : value.kind === "String" ? stringParamBytes(value.value) : value.value })
     }
     return params
 }
@@ -538,8 +540,9 @@ type Forks = (StreamIter | undefined)[]
  *                   Forks are per-frame, like handles — ids restart at 1 in
  *                   every callee, so a delegating codec keeps a parked fork
  *                   (§8.4's checksum-with-fixup) across the calls it makes.
+ * @param keys      the key slot table a keyed `INIT` reads (the workspace's docs/crypto.md §5).
  */
-export function createCodecExtension(direction: Direction, root: Handle, buffer: number[]): Extension<CodecExtInstr>
+export function createCodecExtension(direction: Direction, root: Handle, buffer: number[], keys?: KeyTable): Extension<CodecExtInstr>
 {
     const frames: Frame[] = [[root]]
     const i0: StreamIter = { pos: 0, capability: direction === "encode" ? "write" : "read", overwriteOnly: false }
@@ -793,7 +796,7 @@ export function createCodecExtension(direction: Direction, root: Handle, buffer:
             case "INIT":
             {
                 const { crypto, alg, params } = instr
-                cryptos()[crypto] = createCryptoContext(alg, params)
+                cryptos()[crypto] = createCryptoContext(alg, params, keys)
                 return
             }
 

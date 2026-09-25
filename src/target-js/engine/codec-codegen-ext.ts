@@ -366,10 +366,10 @@ export function translateExt(e: Extract<Expr<CodecExtInstr>, {kind: ExprKind.Ext
         case "INIT":
         {
             // Fails here, at generation, on anything the runtime would refuse.
-            cryptoSpec(e.alg, e.params)
+            const keyed = cryptoSpec(e.alg, e.params).key !== undefined
             const spec = `${g.procName}_spec${g.hoisted.length}`
             g.hoisted.push(`const ${spec} = cryptoSpec(${JSON.stringify(e.alg)}, ${JSON.stringify(e.params)});`)
-            return `c${e.crypto} = ${spec}.create()`
+            return keyed ? `c${e.crypto} = cryptoCreateKeyed(ctx, ${spec})` : `c${e.crypto} = ${spec}.create()`
         }
         case "ABSORB": return `cryptoAbsorb(ctx, c${e.crypto}, ${e.src}, ${e.end})`
         case "ABSORB_REST": return `cryptoAbsorbRest(ctx, c${e.crypto}, ${e.src})`

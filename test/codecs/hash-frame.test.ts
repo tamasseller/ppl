@@ -20,7 +20,7 @@ import { binaryEncodeRules, binaryDecodeRules } from "../../src/codecs/component
 import type { FrameSpec } from "../../src/codecs/components/framed"
 import { framedEncode, framedDecode } from "../../src/codecs/components/framed"
 import type { CryptoParam } from "../../src/codecs/engine/crypto/crypto"
-import { createCryptoContext, integerParamBytes } from "../../src/codecs/engine/crypto/crypto"
+import { createCryptoContext, integerParamBytes, stringParamBytes } from "../../src/codecs/engine/crypto/crypto"
 import { HASH_NAMES } from "../../src/codecs/engine/crypto/hashes"
 
 const abc = [0x61, 0x62, 0x63]
@@ -110,7 +110,6 @@ describe("hashes — parameters", () =>
         assert.throws(() => createCryptoContext("SHA-256", [int("out_len", 16)]), /unknown parameter "out_len"/)
         assert.throws(() => createCryptoContext("SHA-256", [int("tag_len", 33)]), /"tag_len" must be 1\.\.32/)
         assert.throws(() => createCryptoContext("BLAKE2b", [int("out_len", 65)]), /"out_len" must be 1\.\.64/)
-        assert.throws(() => createCryptoContext("BLAKE2b", [bytes("key", [1])]), /unknown parameter "key"/)
         assert.throws(() => createCryptoContext("BLAKE2s", [bytes("salt", [1, 2, 3])]), /"salt" must be 8 bytes/)
         assert.throws(() => createCryptoContext("SHA-256", [int("tag_len", 8), int("tag_len", 8)]), /given twice/)
     })
@@ -151,7 +150,7 @@ function decode(spec: FrameSpec, wire: readonly number[]): { result: VmResult; v
 }
 
 const paramsOf = (spec: FrameSpec): CryptoParam[] =>
-    Object.entries(spec.params ?? {}).map(([name, v]) => typeof v === "number" ? int(name, v) : bytes(name, v))
+    Object.entries(spec.params ?? {}).map(([name, v]) => typeof v === "number" ? int(name, v) : typeof v === "string" ? { name, value: stringParamBytes(v) } : bytes(name, v))
 
 describe("hash frame — under the interpreter", () =>
 {

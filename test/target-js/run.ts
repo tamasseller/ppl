@@ -10,6 +10,7 @@ import "./control-flow-codegen.runtime.test"
 import "./bridging-codec.runtime.test"
 import "./crc-frame.runtime.test"
 import "./hash-frame.runtime.test"
+import "./mac-frame.runtime.test"
 
 import {generateJsTypes, generateJsCodecs} from "../../src/target-js/index"
 import {struct, integer, named} from "../../src/core/index"

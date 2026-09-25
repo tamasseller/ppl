@@ -195,6 +195,7 @@ A string is `list(integer)`; the element's `meaning` is `text:codepoint`, canoni
 ### 4.1 Matching by name
 
 - Struct fields and union variants match by name, never by `ref` index.
+- Crypto slots match by name too, their algorithm and role compared (the workspace's docs/crypto.md §5). Unimplemented.
 - A list's one element edge needs no name.
 - The image's `ref` operands stay positional into the image tree forever. Reconciliation is a codegen-time bridge, not a transformation of the image.
 
