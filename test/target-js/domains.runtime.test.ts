@@ -60,6 +60,13 @@ describe("validation (§5.2): ordinary generated code", () =>
         assert.throws(() => plain(T).encode({ v: NaN }), /invalid value at T\.v/)
     })
 
+    test("a range away from zero round-trips its raw values", () =>
+    {
+        const R = named("T", struct({ a: integer(1000, 1100), b: integer(-200, 50), l: list(integer(1000, 1100)) }))
+        const v = { a: 1050, b: -200, l: [1000, 1100] }
+        assert.deepEqual(plain(R).decode(plain(R).encode(v)), v)
+    })
+
     test("a list's length is validated both ways", () =>
     {
         const L = named("T", struct({ l: list(u8, { maxLength: 3 }) }))

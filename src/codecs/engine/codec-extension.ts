@@ -48,7 +48,7 @@ function pastEnd(state: ExecState): never
     return state.trap(PAST_END_TRAP)
 }
 
-/** Smallest byte width that fits an integer type's declared range — the
+/** Smallest byte width that holds every value of an integer type's range, signed iff `min < 0` — the
  *  source of truth for both `../components/binary-rules.ts` (which byte
  *  count to `WRITE`/`READ`) and `toHostNumber` below (which bit is the sign
  *  bit). Lives here, not in `binary-rules.ts`, so this file — the
@@ -57,9 +57,11 @@ function pastEnd(state: ExecState): never
  *  from here instead. */
 export function intWireSize(t: {min: number, max: number}): number
 {
-    const range = t.max - t.min
-    if(range <= 0xFF) return 1
-    if(range <= 0xFFFF) return 2
+    for(const width of [1, 2])
+    {
+        const bits = width * 8
+        if(t.min >= 0 ? t.max < 2 ** bits : -(2 ** (bits - 1)) <= t.min && t.max < 2 ** (bits - 1)) return width
+    }
     return 4
 }
 

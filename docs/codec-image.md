@@ -158,7 +158,8 @@ encode(node):
         unit:    emit PUSH_UNIT
         integer: emit canonical PUSH_* if no default, else whichever
                  PUSH_INT_*EXT fits (min=0? default? both? neither?);
-                 then MEANING(idx) if it has a meaning
+                 then MEANING(idx) if it has a meaning,
+                 then AFFINE(scale, offset) if it has a toCanonical
         list:    encode(elementType); emit whichever LIST form fits its bounds
         struct:  for each field:   encode(child)
                  emit STRUCT(N, nameSpec) or, if N ≥ 64,
@@ -242,7 +243,7 @@ one; `PUSH_REF`/`PUSH_REF_EXT` look up `table[nextIndex - delta]` and push a
 copy without adding a new entry.
 
 Discovery keys on a structural *signature*, a pure function of shape (kind,
-range, default, meaning, length bounds, field/variant names, recursively) computed before deciding whether to
+range, default, meaning, toCanonical, length bounds, field/variant names, recursively) computed before deciding whether to
 recurse into children. Keying on the emitted bytes instead never matches a
 repeated composite's second occurrence: its children resolve to short
 backrefs the first occurrence's construction bytes lack, so two occurrences

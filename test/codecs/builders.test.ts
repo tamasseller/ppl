@@ -14,11 +14,11 @@ import { describe, test } from "node:test"
 import assert from "node:assert/strict"
 
 import type { SemanticType, UnitPattern } from "../../src/core/index"
-import { struct, union, unit, u8, u16, i8, i16, i32, list, pUnit, buildTypeGraph } from "../../src/core/index"
+import { struct, union, unit, u8, u16, i8, i16, i32, u32, integer, list, pUnit, buildTypeGraph } from "../../src/core/index"
 import { ir, validateProgram, run } from "mog-core"
 
 import { buildCodec } from "../../src/codecs/engine/resolver"
-import { createCodecExtension } from "../../src/codecs/engine/codec-extension"
+import { createCodecExtension, intWireSize } from "../../src/codecs/engine/codec-extension"
 import type { CodecRule } from "../../src/codecs/engine/resolver"
 import { codecRule } from "../../src/codecs/engine/resolver"
 import { binaryEncodeRules, binaryDecodeRules } from "../../src/codecs/components/binary-rules"
@@ -75,6 +75,23 @@ describe("buildCodec — integers, lists, standalone unions", () =>
         assert.equal(roundTrip(i16, -12345).decoded, -12345)
         assert.equal(roundTrip(i32, -2147483648).decoded, -2147483648) // i32's own min
         assert.equal(roundTrip(i16, 32767).decoded, 32767) // positive values unaffected
+    })
+
+    test("the wire width holds the values, not their span, signed iff min < 0", () =>
+    {
+        const cases: [ReturnType<typeof integer>, number][] = [
+            [u8, 1], [i8, 1], [u16, 2], [i16, 2], [u32, 4], [i32, 4],
+            [integer(1000, 1100), 2], [integer(-200, 50), 2], [integer(-128, 127), 1], [integer(-129, 0), 2],
+            [integer(-1, 255), 2], [integer(0, 256), 2], [integer(70000, 70001), 4],
+        ]
+        for(const [t, width] of cases) assert.equal(intWireSize(t), width, `${t.min}..${t.max}`)
+    })
+
+    test("a range away from zero round-trips its raw values", () =>
+    {
+        assert.deepEqual(roundTrip(integer(1000, 1100), 1050), { buffer: [0x1A, 0x04], decoded: 1050 })
+        assert.deepEqual(roundTrip(integer(-200, 50), -200), { buffer: [0x38, 0xFF], decoded: -200 })
+        assert.deepEqual(roundTrip(list(integer(1000, 1100)), [1000, 1100]).decoded, [1000, 1100])
     })
 
     test("length-prefixed list round-trips, including empty", () =>

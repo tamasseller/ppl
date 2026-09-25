@@ -112,7 +112,7 @@ export type Transform =
 ```
 
 - Implemented: `affine`, written `affine(scale, offset)` with integers or `[num, den]` pairs.
-- Scale is an exact rational, never a float: chains compose exactly, a power-of-two ratio is decidable (emit a shift), identity is recognizable (emit nothing).
+- Scale is an exact rational, never a float: chains compose exactly, identity is recognizable (emit nothing), a power-of-two denominator is decidable. A target may emit a shift for it; target-js divides, since its shifts are 32-bit.
 - `log`'s `reference` is mandatory: dBm vs dBV vs dBFS is where dB bugs live.
 - `compose` returns `readonly Transform[]`, normalized by folding adjacent affines and dropping identities. Only affine is closed under composition.
 - Inversion: affine iff `scale ≠ 0`; log always; table iff injective (`interp: "none"`) or strictly monotonic (`"linear"`). Checked at build time.
@@ -369,7 +369,7 @@ encode:  host ─toWire─▶ y ─[validate]─▶ y ∈ D_local ─[bridge g�
 
 ## 7. Staging
 
-Each stage carries its own image encoding change, and its tests: classification cells in `reconcile.runtime.test.ts`, executed behavior in `bridging-codec.runtime.test.ts`. A stage that breaks existing schemas migrates `ppl-example` in the same step.
+Each stage carries its own image encoding change, and its tests: classification cells in `reconcile.runtime.test.ts`, executed behavior in a target-js runtime test (`bridging-codec`, `domains`, `transforms`). A stage that breaks existing schemas migrates `ppl-example` in the same step.
 
 1. Done: §4.1, §4.2's `reconcile` and `resolve`, §4.4, §4.5 via `defaultVariant`, §2.4.
 2. Done: options-object constructors (§2.2).
