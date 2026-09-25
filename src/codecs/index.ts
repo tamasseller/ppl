@@ -23,6 +23,8 @@ export * from "./engine/crypto/crypto"
 export * from "./engine/crypto/crc-catalogue"
 export { crcValue } from "./engine/crypto/crc"
 export { HASH_NAMES } from "./engine/crypto/hashes"
+export { MAC_NAMES } from "./engine/crypto/macs"
+export * from "./engine/crypto/keys"
 
 export * from "./components/binary-rules"
 export * from "./components/delta-leb128"

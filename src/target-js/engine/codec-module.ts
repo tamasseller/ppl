@@ -31,8 +31,8 @@ import type {RtlProgram, RaisedProc} from "mog-core"
 import {raiseProgram} from "mog-core"
 import type {SemanticType, TypeGraph, TypeNode} from "../../core/index"
 import {buildTypeGraph, firstPaths, nameOf} from "../../core/index"
-import type {Direction, CodecExtInstr} from "../../codecs/index"
-import {resolveHandleTypes, CODEC_EFFECTS} from "../../codecs/index"
+import type {Direction, CodecExtInstr, KeyRequirement} from "../../codecs/index"
+import {resolveHandleTypes, CODEC_EFFECTS, keySlots} from "../../codecs/index"
 import type {TsRule, TSTypeDecl} from "./resolver"
 import {projectTSTypes, emitTSDeclarations} from "./resolver"
 import {tsTypeRules} from "../components/ts-emitter"
@@ -113,8 +113,31 @@ export interface CodecModuleOptions
 export const RUNTIME_IMPORTS = [
     "read", "write", "hasNext", "cloneRd", "cloneWr", "seek", "pushForks", "popForks", "writeSeq", "readSeq", "readSeqView", "writeSeqRaw",
     "tagOf", "signExtend", "revBits", "CodecTrap", "inDomain", "saturate", "orReplace", "divRound",
-    "cryptoSpec", "cryptoAbsorb", "cryptoAbsorbRest", "cryptoFinal", "cryptoVerify",
+    "cryptoSpec", "cryptoCreateKeyed", "cryptoAbsorb", "cryptoAbsorbRest", "cryptoFinal", "cryptoVerify", "bindKeys",
 ] as const
+
+/** The `encode${name}`/`decode${name}` pair; with `slots`, each takes the
+ *  key slot table and checks it before running. */
+export function entryPoints(name: string, valueType: string, slots: readonly KeyRequirement[]): string
+{
+    const keyed = slots.length > 0
+    const keysParam = keyed ? ", keys: ReadonlyMap<string, Uint8Array>" : ""
+    const bind = keyed ? "\n    bindKeys(KEY_SLOTS, keys)" : ""
+    const keysField = keyed ? ", keys" : ""
+    const table = keyed
+        ? `const KEY_SLOTS = [\n${slots.map(s => `    { alg: ${JSON.stringify(s.alg)}, slot: ${JSON.stringify(s.slot)}, minLen: ${s.minLen}, maxLen: ${s.maxLen === Infinity ? "Infinity" : s.maxLen} },`).join("\n")}\n]\n\n`
+        : ""
+    return `${table}export function encode${name}(value: ${valueType}${keysParam}): Uint8Array {${bind}
+    const ctx: Ctx = { buffer: new Uint8Array(64), length: 0, iters: [{ pos: 0, capability: "write", overwriteOnly: false }]${keysField} }
+    encode_proc0(value, ctx)
+    return ctx.buffer.subarray(0, ctx.length)
+}
+
+export function decode${name}(bytes: Uint8Array${keysParam}): ${valueType} {${bind}
+    const ctx: Ctx = { buffer: bytes, length: bytes.length, iters: [{ pos: 0, capability: "read", overwriteOnly: false }]${keysField} }
+    return decode_proc0(ctx)
+}`
+}
 
 /**
  * Generate one self-contained TypeScript module: the projected TS type
@@ -160,14 +183,5 @@ ${generateProcedures(encodeProgram, encodeEntryTypes, "encode", typeResult, path
 
 ${generateProcedures(decodeProgram, decodeEntryTypes, "decode", typeResult, paths)}
 
-export function encode${name}(value: ${valueType}): Uint8Array {
-    const ctx: Ctx = { buffer: new Uint8Array(64), length: 0, iters: [{ pos: 0, capability: "write", overwriteOnly: false }] }
-    encode_proc0(value, ctx)
-    return ctx.buffer.subarray(0, ctx.length)
-}
-
-export function decode${name}(bytes: Uint8Array): ${valueType} {
-    const ctx: Ctx = { buffer: bytes, length: bytes.length, iters: [{ pos: 0, capability: "read", overwriteOnly: false }] }
-    return decode_proc0(ctx)
-}`
+${entryPoints(name, valueType, keySlots([encodeProgram, decodeProgram]))}`
 }

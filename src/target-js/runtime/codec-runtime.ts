@@ -21,7 +21,8 @@
  * either).
  */
 
-import type {CryptoContext} from "../../codecs/engine/crypto/crypto"
+import type {CryptoContext, CryptoSpec, KeyTable} from "../../codecs/engine/crypto/crypto"
+import {keyFor} from "../../codecs/engine/crypto/crypto"
 import {PAST_END_TRAP} from "../../codecs/engine/codec-extension"
 
 /** TAG: which variant is currently active, as its declaration-order
@@ -115,7 +116,7 @@ export interface Iter { pos: number; capability: "read" | "write"; overwriteOnly
  *  returns `ctx.buffer.subarray(0, ctx.length)` — a *view*, not a copy,
  *  trimmed to exactly what was written; `decode${name}` passes its own
  *  `bytes` parameter straight through as `buffer`, no copy either. */
-export interface Ctx { buffer: Uint8Array; length: number; iters: Iter[] }
+export interface Ctx { buffer: Uint8Array; length: number; iters: Iter[]; keys?: KeyTable }
 
 function requireAvailable(ctx: Ctx, pos: number, bytes: number): void
 {
@@ -469,6 +470,12 @@ export class CodecTrap extends Error
 }
 
 // ── Crypto contexts (the workspace's docs/crypto.md) ─────────────────────
+
+/** A context from keyed `spec`, its key taken from `ctx.keys`. */
+export function cryptoCreateKeyed(ctx: Ctx, spec: CryptoSpec): CryptoContext
+{
+    return spec.create(keyFor(spec.key!, ctx.keys))
+}
 
 /** Advance reader `srcIdx` to `endIdx`'s position, absorbing what it passes. */
 export function cryptoAbsorb(ctx: Ctx, c: CryptoContext, srcIdx: number, endIdx: number): void

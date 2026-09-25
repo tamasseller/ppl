@@ -17,15 +17,15 @@ import type { NamedMatch, TypeMatch, TypePattern } from "../../core/index"
 import { pNamed } from "../../core/index"
 import type { CodecRule } from "../engine/resolver"
 import type { CryptoParam } from "../engine/crypto/crypto"
-import { cryptoSpec, integerParamBytes } from "../engine/crypto/crypto"
+import { cryptoSpec, integerParamBytes, stringParamBytes } from "../engine/crypto/crypto"
 
 export interface FrameSpec
 {
     /** A RevEng catalogue name, `"CRC"` with the six Rocksoft parameters,
      *  or a hash name (`HASH_NAMES`). */
     readonly alg: string
-    /** Integers or byte strings, e.g. `{byteorder: 1}`. */
-    readonly params?: Readonly<Record<string, number | readonly number[]>>
+    /** Integers, byte strings, or a slot role's slot name, e.g. `{byteorder: 1}`, `{key: "sensor-mac"}`. */
+    readonly params?: Readonly<Record<string, number | string | readonly number[]>>
     /** The `TRAP` code a decode-side mismatch raises. */
     readonly code: number
 }
@@ -38,7 +38,7 @@ const irBytes = (b: readonly number[]): string =>
 function initArgs(spec: FrameSpec): string
 {
     const pairs = Object.entries(spec.params ?? {}).map(([name, v]) =>
-        `, ${irString(name)}, ${typeof v === "number" ? String(v) : irBytes(v)}`)
+        `, ${irString(name)}, ${typeof v === "number" ? String(v) : typeof v === "string" ? irString(v) : irBytes(v)}`)
     return `${irString(spec.alg)}${pairs.join("")}`
 }
 
@@ -46,7 +46,7 @@ function initArgs(spec: FrameSpec): string
 function outLenOf(spec: FrameSpec): number
 {
     const params: CryptoParam[] = Object.entries(spec.params ?? {}).map(([name, v]) =>
-        ({ name, value: typeof v === "number" ? integerParamBytes(v) : v }))
+        ({ name, value: typeof v === "number" ? integerParamBytes(v) : typeof v === "string" ? stringParamBytes(v) : v }))
     return cryptoSpec(spec.alg, params).outLen
 }
 

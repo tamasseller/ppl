@@ -53,9 +53,10 @@ function booleanParam(alg: string, name: string, v: bigint): boolean
 
 function crcModel(alg: string, params: readonly CryptoParam[]): CrcModel
 {
-    const given = paramMap(alg, params)
     const canonical = ALIAS_OF.get(alg)
     if(canonical !== undefined) throw new Error(`crypto: "${alg}" is an alias; name it by its catalogue entry, "${canonical}"`)
+    if(alg !== "CRC" && !CANONICAL.has(alg)) throw new Error(`crypto: unknown algorithm "${alg}"`)
+    const given = paramMap(alg, params)
 
     const allowed: readonly string[] = alg === "CRC" ? [...ROCKSOFT, "byteorder"] : ["byteorder"]
     for(const name of given.keys())
@@ -80,9 +81,7 @@ function crcModel(alg: string, params: readonly CryptoParam[]): CrcModel
     }
     else
     {
-        const entry = CANONICAL.get(alg)
-        if(!entry) throw new Error(`crypto: unknown algorithm "${alg}"`)
-        base = entry
+        base = CANONICAL.get(alg)!
     }
 
     const order = given.get("byteorder")

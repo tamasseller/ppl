@@ -4,10 +4,11 @@
  *
  * One implementation, shared by the interpreter (`codec-extension.ts`) and
  * generated code (`target-js`'s runtime). An algorithm name resolves to a
- * family: keyless hashes in `./hashes.ts`, CRCs in `./crc.ts`.
+ * family: hashes in `./hashes.ts`, MACs in `./macs.ts`, CRCs in `./crc.ts`.
  */
 
 import { hashSpec } from "./hashes"
+import { macSpec } from "./macs"
 import { crcSpec } from "./crc"
 
 /** One `INIT` parameter as the wire carries it: its value's meaning is
@@ -29,6 +30,12 @@ export interface CryptoContext
     final(): number[]
 }
 
+/** Parameters whose value names a slot; theirs alone is a string. */
+export const SLOT_ROLES: ReadonlySet<string> = new Set(["key"])
+
+/** A string parameter's UTF-8 bytes. */
+export const stringParamBytes = (value: string): number[] => [...Buffer.from(value, "utf8")]
+
 /** An integer parameter's little-endian bytes, as short as the value allows. */
 export function integerParamBytes(value: number | bigint): number[]
 {
@@ -39,12 +46,38 @@ export function integerParamBytes(value: number | bigint): number[]
     return bytes
 }
 
+/** What a keyed configuration needs bound in its `key` slot. */
+export interface KeyRequirement
+{
+    readonly alg: string
+    readonly slot: string
+    readonly minLen: number
+    readonly maxLen: number
+}
+
 /** A configuration resolved once: its table, and a factory for contexts. */
 export interface CryptoSpec
 {
     /** The result's wire length. */
     readonly outLen: number
-    create(): CryptoContext
+    /** Present exactly when the configuration is keyed. */
+    readonly key?: KeyRequirement
+    /** `key` is the bound slot's bytes, required exactly when `this.key` is. */
+    create(key?: Uint8Array): CryptoContext
+}
+
+/** Keys by slot name. */
+export type KeyTable = ReadonlyMap<string, Uint8Array>
+
+/** Slot `req.slot`'s key in `keys`, checked against `req`. */
+export function keyFor(req: KeyRequirement, keys: KeyTable | undefined): Uint8Array
+{
+    const key = keys?.get(req.slot)
+    const range = req.maxLen === Infinity ? `at least ${req.minLen} byte(s)` : `${req.minLen}..${req.maxLen} bytes`
+    if(key === undefined) throw new Error(`crypto: key slot "${req.slot}": ${req.alg} needs a key of ${range}, none bound`)
+    if(key.length < req.minLen || key.length > req.maxLen)
+        throw new Error(`crypto: key slot "${req.slot}": ${req.alg} needs a key of ${range}, not ${key.length}`)
+    return key
 }
 
 const SPECS = new Map<string, CryptoSpec>()
@@ -57,13 +90,14 @@ export function cryptoSpec(alg: string, params: readonly CryptoParam[]): CryptoS
     let spec = SPECS.get(key)
     if(!spec)
     {
-        spec = hashSpec(alg, params) ?? crcSpec(alg, params)
+        spec = hashSpec(alg, params) ?? macSpec(alg, params) ?? crcSpec(alg, params)
         SPECS.set(key, spec)
     }
     return spec
 }
 
-export function createCryptoContext(alg: string, params: readonly CryptoParam[]): CryptoContext
+export function createCryptoContext(alg: string, params: readonly CryptoParam[], keys?: KeyTable): CryptoContext
 {
-    return cryptoSpec(alg, params).create()
+    const spec = cryptoSpec(alg, params)
+    return spec.create(spec.key && keyFor(spec.key, keys))
 }

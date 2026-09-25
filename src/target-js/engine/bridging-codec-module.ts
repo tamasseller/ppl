@@ -35,12 +35,12 @@ import {buildTypeGraph} from "../../core/index"
 import type {Direction, Correspondence} from "../../core/index"
 import {reconcile} from "../../core/index"
 import type {CodecExtInstr, CodecImage} from "../../codecs/index"
-import {resolveHandleCorrespondences, CODEC_EFFECTS} from "../../codecs/index"
+import {resolveHandleCorrespondences, CODEC_EFFECTS, keySlots} from "../../codecs/index"
 import type {TsRule, TSTypeDecl} from "./resolver"
 import {projectTSTypes, emitTSDeclarations} from "./resolver"
 import {tsTypeRules} from "../components/ts-emitter"
 import {generateProcedure} from "./codec-codegen"
-import {RUNTIME_IMPORTS} from "./codec-module"
+import {RUNTIME_IMPORTS, entryPoints} from "./codec-module"
 
 /** Recover each reachable procedure's own boundary `Correspondence`, by
  *  index, from `root` — the same recursive descent `codec-module.ts`'s own
@@ -160,14 +160,5 @@ ${generateProcedures(image.encoderProgram, encodeCorrespondences, "encode", type
 
 ${generateProcedures(image.decoderProgram, decodeCorrespondences, "decode", typeResult)}
 
-export function encode${name}(value: ${valueType}): Uint8Array {
-    const ctx: Ctx = { buffer: new Uint8Array(64), length: 0, iters: [{ pos: 0, capability: "write", overwriteOnly: false }] }
-    encode_proc0(value, ctx)
-    return ctx.buffer.subarray(0, ctx.length)
-}
-
-export function decode${name}(bytes: Uint8Array): ${valueType} {
-    const ctx: Ctx = { buffer: bytes, length: bytes.length, iters: [{ pos: 0, capability: "read", overwriteOnly: false }] }
-    return decode_proc0(ctx)
-}`
+${entryPoints(name, valueType, keySlots([image.encoderProgram, image.decoderProgram]))}`
 }
